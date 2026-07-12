@@ -8,8 +8,8 @@ use tokio::sync::mpsc;
 
 #[tokio::main]
 async fn main() -> eframe::Result<()> {
-    // Requests flow UI -> worker over this channel.
-    let (tx_req, rx_req) = mpsc::channel::<state::PingRequest>(100);
+    // Commands (Start/Stop/Delete) flow UI -> worker over this channel.
+    let (tx_req, rx_req) = mpsc::channel::<state::WorkerCommand>(100);
 
     // Results flow worker -> UI through shared state instead of a channel:
     // the worker writes into it, the UI reads a snapshot every frame.
