@@ -1,0 +1,19 @@
+[package]
+name = "kammer-pinger"
+version = "0.1.0"
+edition = "2024"
+
+[profile.release]
+lto = true          # Link Time Optimization: merges all crates into one unit
+codegen-units = 1   # Reduces parallel compilation to allow more aggressive optimizations
+panic = "abort"     # Removes stack unwinding code (saves a lot of space)
+strip = true        # Automatically strips symbols from the binary
+
+[dependencies]
+egui = "0.35.0" # GUI framework
+eframe = "0.35.0"
+tokio = { version = "1.52.3", features = ["full"] } # Async runtime
+surge-ping = "0.9.0" # Async ICMP
+# Useful for retrieving local IPs
+default-net = "0.22.0"
+
