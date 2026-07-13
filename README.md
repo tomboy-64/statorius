@@ -1,3 +1,22 @@
+# Statorius - a swiss-army-knife for network probing
+
+## Current features
+
+Right now it's simply a Pinger.
+
+## Planned features
+
+- Various ping variants
+  - ICMP Type 13, Type 17, Traceroute 
+  - ARPing
+  - TCP-Connect, TCP-Syn, TCP-Ack
+  - UDP Null
+  - IP Protocol Ping
+  - TCP Idle/Zombie Ping
+- Pings in separate VLANs
+- DHCP Monitoring
+- Duplicate IP alerts
+
 ## Building for Windows (Cross-Compilation)
 
 This project relies on the `pcap` crate, which requires the Npcap SDK when targeting Windows. Due to licensing, the SDK is not included in this repository.
