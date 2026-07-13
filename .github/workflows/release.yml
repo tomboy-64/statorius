@@ -1,0 +1,75 @@
+name: Release Build
+
+# This workflow triggers ONLY when you push a tag that starts with 'v' (e.g., v1.0.0)
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    name: Build on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+
+    # Run two jobs in parallel: one on Linux, one on Windows
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact_name: statorius-linux-amd64
+            binary_name: statorius # CHANGE THIS to your actual binary name
+          - os: windows-latest
+            artifact_name: statorius-windows-amd64.exe
+            binary_name: statorius.exe # CHANGE THIS to your actual binary name
+
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Install Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      # LINUX ONLY: Install the native C-headers for pcap
+      - name: Install libpcap (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libpcap-dev
+
+      # WINDOWS ONLY: Download Npcap SDK and set environment variable
+      - name: Setup Npcap SDK (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          Invoke-WebRequest -Uri "https://npcap.com/dist/npcap-sdk-1.13.zip" -OutFile "npcap-sdk.zip"
+          Expand-Archive -Path "npcap-sdk.zip" -DestinationPath "npcap-sdk"
+          # Set the environment variable for the subsequent build step
+          echo "LIBPCAP_LIB_DIR=${{ github.workspace }}\npcap-sdk\Lib\x64" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Build Release Binary
+        run: cargo build --release
+
+      # Upload the finished binary as an artifact
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: target/release/${{ matrix.binary_name }}
+
+  # Once both builds finish, create a GitHub Release and attach the binaries
+  create_release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/statorius-linux-amd64/*
+            artifacts/statorius-windows-amd64.exe/*
+          generate_release_notes: true
