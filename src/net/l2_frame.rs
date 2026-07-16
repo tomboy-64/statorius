@@ -7,14 +7,14 @@
 //! TCP connect-scan and UDP null-scan later) is method-specific - see
 //! `l2_engine.rs` for where that split happens.
 
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::net::{Ipv4Addr};
 
 use pnet::packet::icmp::{echo_reply, echo_request, IcmpPacket, IcmpTypes};
 use pnet::packet::ipv4::{Ipv4Packet, MutableIpv4Packet};
 use pnet::util::MacAddr;
 use pnet::packet::{ethernet::MutableEthernetPacket, ip::IpNextHeaderProtocols};
 use pnet::packet::{arp::{ArpHardwareTypes, ArpOperations, ArpPacket, MutableArpPacket}};
-use pnet::packet::{MutablePacket, ethernet::EtherType};
+use pnet::packet::{ethernet::EtherType};
 
 pub const ETH_HEADER_LEN: usize = 14;
 pub const VLAN_TAG_LEN: usize = 4;
