@@ -1,6 +1,6 @@
 [package]
 name = "statorius"
-version = "0.2.6"
+version = "0.2.7"
 edition = "2024"
 
 [profile.release]
@@ -19,7 +19,7 @@ default-net = "0.22"
 # (Npcap on Windows, libpcap on Linux)
 pcap = "2.4"
 # Lets PingBackend be a plain `async fn`-based trait usable as `Box<dyn PingBackend>`
-async-trait = "0.1"
+async-trait = "0.1.89"
 # Raw Ethernet/VLAN/ARP/IPv4/ICMP frame construction+parsing for L2 pings.
 # Already pulled in transitively by surge-ping; declared directly now that
 # we build our own frames with it too. Pinned to match surge-ping's version

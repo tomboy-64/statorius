@@ -6,6 +6,7 @@ pub(crate) mod l2_ipc;
 pub(crate) mod l2_manager;
 pub(crate) mod l2_pinger;
 pub(crate) mod l2;
+mod windows_elevate;
 
 use std::collections::HashMap;
 use std::net::IpAddr;
