@@ -13,6 +13,7 @@ Right now it's simply a Pinger.
   - UDP Null
   - IP Protocol Ping
   - TCP Idle/Zombie Ping
+  - DNS-Server check
 - Pings in separate VLANs
 - DHCP Monitoring
 - Duplicate IP alerts
