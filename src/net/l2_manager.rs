@@ -10,7 +10,7 @@
 
 use std::collections::HashMap;
 use std::env;
-use std::net::Ipv4Addr;
+use std::net::IpAddr;
 use std::path::Path;
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
@@ -66,14 +66,19 @@ pub enum L2Command {
 /// wants to perform a raw ping or duplicate check (today: `l2_pinger`).
 /// Fails immediately (not queued) if L2 isn't `Active` right now.
 pub enum L2JobRequest {
+    /// Ping `target` from `source_ip` - the address the caller intends to
+    /// send from, not necessarily this interface's own configured address.
     Ping {
-        target: Ipv4Addr,
+        source_ip: IpAddr,
+        target: IpAddr,
         vlan: Option<u16>,
         timeout: Duration,
         respond_to: oneshot::Sender<L2PingOutcomeWire>,
     },
+    /// Check whether `candidate` (a source address under consideration,
+    /// *not* a ping target) is already claimed by someone else.
     CheckDuplicate {
-        target: Ipv4Addr,
+        candidate: IpAddr,
         vlan: Option<u16>,
         timeout: Duration,
         respond_to: oneshot::Sender<L2DuplicateOutcomeWire>,
@@ -96,6 +101,7 @@ impl L2JobRequest {
     fn into_message_and_reply(self, id: u64) -> (L2Message, PendingReply) {
         match self {
             L2JobRequest::Ping {
+                source_ip,
                 target,
                 vlan,
                 timeout,
@@ -103,6 +109,7 @@ impl L2JobRequest {
             } => (
                 L2Message::PingRequest {
                     id,
+                    source_ip,
                     target,
                     vlan,
                     timeout_ms: timeout.as_millis() as u32,
@@ -110,14 +117,14 @@ impl L2JobRequest {
                 PendingReply::Ping(respond_to),
             ),
             L2JobRequest::CheckDuplicate {
-                target,
+                candidate,
                 vlan,
                 timeout,
                 respond_to,
             } => (
                 L2Message::DuplicateCheckRequest {
                     id,
-                    target,
+                    candidate,
                     vlan,
                     timeout_ms: timeout.as_millis() as u32,
                 },

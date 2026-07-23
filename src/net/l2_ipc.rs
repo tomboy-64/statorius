@@ -4,7 +4,7 @@
 //! Newline-delimited JSON keeps the wire format trivially debuggable.
 
 use std::io;
-use std::net::Ipv4Addr;
+use std::net::IpAddr;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
@@ -14,7 +14,7 @@ use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader
 ///
 /// `PingRequest`/`DuplicateCheckRequest` carry an `id` so replies can be
 /// matched up even though multiple requests can be in flight *from the GUI's
-/// point of view* at once (queued) - the engine on the helper side still
+/// point of view* at once (queued). The engine on the helper side still
 /// only ever works on one at a time (see `l2_engine`), it just doesn't block
 /// the IPC connection itself while doing so.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -26,20 +26,25 @@ pub enum L2Message {
     /// GUI -> Helper: please exit gracefully.
     Shutdown,
 
-    /// GUI -> Helper: perform one ICMP-over-L2 echo.
+    /// GUI -> Helper: perform one ICMP-over-L2 echo, from `source_ip` to
+    /// `target` - `source_ip` is the address the user intends to send from,
+    /// not necessarily this interface's own configured address.
     PingRequest {
         id: u64,
-        target: Ipv4Addr,
+        source_ip: IpAddr,
+        target: IpAddr,
         vlan: Option<u16>,
         timeout_ms: u32,
     },
     /// Helper -> GUI: result of a `PingRequest` with the same `id`.
     PingResponse { id: u64, outcome: L2PingOutcomeWire },
 
-    /// GUI -> Helper: check whether more than one host answers for `target`.
+    /// GUI -> Helper: check whether more than one host answers for
+    /// `candidate` - a source address the user is considering using, not a
+    /// ping target.
     DuplicateCheckRequest {
         id: u64,
-        target: Ipv4Addr,
+        candidate: IpAddr,
         vlan: Option<u16>,
         timeout_ms: u32,
     },

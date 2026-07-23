@@ -1,6 +1,6 @@
 [package]
 name = "statorius"
-version = "0.2.7"
+version = "0.3.0"
 edition = "2024"
 
 [profile.release]
@@ -11,7 +11,7 @@ strip = true        # Automatically strips symbols from the binary
 
 [dependencies]
 eframe = "0.35" # GUI framework
-tokio = { version = "1.52.3", features = ["full"] } # Async runtime
+tokio = { version = "1.53.1", features = ["full"] } # Async runtime
 surge-ping = "0.9" # Async ICMP
 # Useful for retrieving local IPs
 default-net = "0.22"
@@ -19,15 +19,23 @@ default-net = "0.22"
 # (Npcap on Windows, libpcap on Linux)
 pcap = "2.4"
 # Lets PingBackend be a plain `async fn`-based trait usable as `Box<dyn PingBackend>`
-async-trait = "0.1.89"
+async-trait = "0.1.91"
 # Raw Ethernet/VLAN/ARP/IPv4/ICMP frame construction+parsing for L2 pings.
-# Already pulled in transitively by surge-ping; declared directly now that
-# we build our own frames with it too. Pinned to match surge-ping's version
-# so cargo doesn't end up resolving two copies.
-pnet = "0.35.0"
+# Deliberately pnet_packet, NOT the full pnet crate: pnet also pulls in
+# pnet_datalink (its own native capture layer), which links Packet.lib on
+# Windows even though we never call into it - our own L2 engine does its own
+# capture via the `pcap` crate above. pnet_packet alone is pure Rust with no
+# native linking at all, so it can't cause this class of problem.
+pnet_packet = "0.35"
+# MacAddr itself lives here, not in pnet_packet::util (that module is just
+# checksum helpers) - pnet_packet depends on pnet_base internally but
+# doesn't re-export it, so we need it directly too. Also pure Rust, no
+# native linking.
+pnet_base = "0.35"
+
 # Wire format for the GUI <-> elevated L2 helper IPC protocol
-serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0.150"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
 
 # Windows-only: ShellExecuteW's "runas" verb, to UAC-elevate the L2 helper
 [target.'cfg(windows)'.dependencies]

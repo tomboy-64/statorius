@@ -2,7 +2,7 @@ mod app;
 mod net;
 mod state;
 
-use app::PingApp;
+use app::StatoriusApp;
 use state::SharedState;
 use tokio::sync::mpsc;
 
@@ -73,10 +73,10 @@ async fn main() -> eframe::Result<()> {
 
     let options = eframe::NativeOptions::default();
     eframe::run_native(
-        "Network Ping Tool",
+        "Statorius",
         options,
         Box::new(|_cc| {
-            Ok(Box::new(PingApp::new(
+            Ok(Box::new(StatoriusApp::new(
                 tx_req,
                 shared_state,
                 l2_readiness,

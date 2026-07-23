@@ -27,7 +27,7 @@ pub async fn run_l2_helper(endpoint: String) {
     };
 
     // Split so we can read incoming requests and write outgoing responses
-    // concurrently - jobs can queue up and complete out of order relative to
+    // concurrently - jobs can queue up and complete out-of-order relative to
     // each other (the engine still only ever runs one at a time; this split
     // just means the IPC connection itself isn't blocked while it does).
     let (read_half, write_half) = tokio::io::split(stream);
@@ -57,13 +57,15 @@ pub async fn run_l2_helper(endpoint: String) {
         match l2_ipc::recv_message(&mut reader).await {
             Ok(Some(L2Message::Shutdown)) | Ok(None) => break,
             Ok(Some(L2Message::PingRequest {
-                id,
-                target,
-                vlan,
-                timeout_ms,
-            })) => {
+                        id,
+                        source_ip,
+                        target,
+                        vlan,
+                        timeout_ms,
+                    })) => {
                 let (tx, rx) = oneshot::channel();
                 let job = L2Job::Ping {
+                    source_ip,
                     target,
                     vlan,
                     timeout: std::time::Duration::from_millis(timeout_ms as u64),
@@ -77,7 +79,7 @@ pub async fn run_l2_helper(endpoint: String) {
                             outcome: L2PingOutcomeWire::Error("L2 engine unavailable".to_owned()),
                         },
                     )
-                    .await;
+                        .await;
                     continue;
                 }
                 // Each request's own wait happens on its own spawned task, so
@@ -98,14 +100,14 @@ pub async fn run_l2_helper(endpoint: String) {
                 });
             }
             Ok(Some(L2Message::DuplicateCheckRequest {
-                id,
-                target,
-                vlan,
-                timeout_ms,
-            })) => {
+                        id,
+                        candidate,
+                        vlan,
+                        timeout_ms,
+                    })) => {
                 let (tx, rx) = oneshot::channel();
                 let job = L2Job::CheckDuplicate {
-                    target,
+                    candidate,
                     vlan,
                     timeout: std::time::Duration::from_millis(timeout_ms as u64),
                     respond_to: tx,
@@ -120,7 +122,7 @@ pub async fn run_l2_helper(endpoint: String) {
                             ),
                         },
                     )
-                    .await;
+                        .await;
                     continue;
                 }
                 let writer = writer.clone();
