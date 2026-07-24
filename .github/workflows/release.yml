@@ -38,10 +38,14 @@ jobs:
       - name: Setup Npcap SDK (Windows)
         if: runner.os == 'Windows'
         run: |
-          Invoke-WebRequest -Uri "https://npcap.com/dist/npcap-sdk-1.13.zip" -OutFile "npcap-sdk.zip"
+          Invoke-WebRequest -Uri "https://npcap.com/dist/npcap-sdk-1.16.zip" -OutFile "npcap-sdk.zip"
           Expand-Archive -Path "npcap-sdk.zip" -DestinationPath "npcap-sdk"
+          
+          # Add the extracted library path to the MSVC LIB environment variable so link.exe can find wpcap.lib
+          echo "LIB=${{ github.workspace }}\npcap-sdk\Lib\x64;$env:LIB" | Out-File -FilePath $env:GITHUB_ENV -Append
+          
           # Set the environment variable for the subsequent build step
-          echo "LIBPCAP_LIB_DIR=${{ github.workspace }}\npcap-sdk\Lib\x64" | Out-File -FilePath $env:GITHUB_ENV -Append
+          #echo "LIBPCAP_LIB_DIR=${{ github.workspace }}\npcap-sdk\Lib\x64" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: Build Release Binary
         run: cargo build --release
