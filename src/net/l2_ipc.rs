@@ -88,7 +88,7 @@ pub type ClientStream = tokio::net::windows::named_pipe::NamedPipeClient;
 /// A unique-enough endpoint name for one GUI process's helper session - the
 /// PID is unique among currently-running processes, which is all we need.
 pub fn endpoint_name() -> String {
-    format!("kammer-pinger-l2-{}", std::process::id())
+    format!("statorius-l2-{}", std::process::id())
 }
 
 #[cfg(unix)]

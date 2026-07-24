@@ -651,7 +651,7 @@ pub fn icmp_echo_hop_limit() -> u8 {
 
 /// Build an ICMP echo request payload (checksummed) for `identifier`/`sequence`.
 pub fn build_icmp_echo_request(identifier: u16, sequence: u16) -> Vec<u8> {
-    let payload = b"kammer-pinger-l2";
+    let payload = b"statorius-l2";
     let mut buf = vec![0u8; echo_request::MutableEchoRequestPacket::minimum_packet_size() + payload.len()];
     {
         let mut echo = echo_request::MutableEchoRequestPacket::new(&mut buf)
@@ -695,7 +695,7 @@ pub fn build_icmpv6_echo_request(
     identifier: u16,
     sequence: u16,
 ) -> Vec<u8> {
-    let payload = b"kammer-pinger-l2";
+    let payload = b"statorius-l2";
     let mut buf = vec![
         0u8;
         icmpv6_echo_request::MutableEchoRequestPacket::minimum_packet_size() + payload.len()

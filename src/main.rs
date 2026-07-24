@@ -8,7 +8,7 @@ use tokio::sync::mpsc;
 
 #[tokio::main]
 async fn main() -> eframe::Result<()> {
-    // Dual-mode binary: `kammer-pinger --l2-helper <endpoint>` is not the
+    // Dual-mode binary: `statorius --l2-helper <endpoint>` is not the
     // GUI at all - it's the (possibly elevated) L2 helper process, spawned
     // by `net::l2_manager` when the user checks "L2 mode". This is checked
     // before touching anything GUI-related, since the helper never opens a
