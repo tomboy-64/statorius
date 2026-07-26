@@ -295,12 +295,13 @@ impl StatoriusApp {
 
         egui::ScrollArea::vertical().id_salt("ping_scroll").show(ui, |ui| {
             egui::Grid::new("ping_results_grid")
-                .num_columns(4)
+                .num_columns(5)
                 .striped(true)
                 .spacing([12.0, 6.0])
                 .show(ui, |ui| {
                     ui.strong("Target");
                     ui.strong("Last");
+                    ui.strong("Since");
                     ui.strong(format!("Avg ({})", crate::state::HISTORY_LEN));
                     ui.strong("");
                     ui.end_row();
@@ -310,6 +311,7 @@ impl StatoriusApp {
                     for entry in self.state.snapshot() {
                         ui.label(entry.target.to_string());
                         render_last_indicator(ui, &entry.last_result);
+                        render_since_indicator(ui, &entry.last_updated);
                         render_average_indicator(ui, &entry.history);
                         render_controls(ui, &entry, &self.tx);
                         ui.end_row();
@@ -319,12 +321,12 @@ impl StatoriusApp {
     }
 
     fn ui_l2_ping_tab(&mut self, ui: &mut egui::Ui) {
-        render_l2_checkbox(ui, &self.l2_readiness, &self.l2_status, &self.l2_tx);
-        ui.add_space(4.0);
-
+        // The "L2 mode" checkbox now lives in the tab row itself; this tab
+        // is only reachable once it's actually active (see `render_tab_bar`),
+        // so this is a defensive fallback rather than the normal path.
         let l2_active = matches!(self.l2_status.get(), L2Status::Active { .. });
         if !l2_active {
-            ui.weak("Activate L2 mode above to use raw L2 pings.");
+            ui.weak("Activate L2 mode in the tab row above to use raw L2 pings.");
             return;
         }
 
@@ -388,7 +390,7 @@ impl StatoriusApp {
 
         egui::ScrollArea::vertical().id_salt("l2_pinger_scroll").show(ui, |ui| {
             egui::Grid::new("l2_pinger_grid")
-                .num_columns(7)
+                .num_columns(8)
                 .striped(true)
                 .spacing([12.0, 6.0])
                 .show(ui, |ui| {
@@ -397,6 +399,7 @@ impl StatoriusApp {
                     ui.strong("VLAN");
                     ui.strong("Round");
                     ui.strong("Last");
+                    ui.strong("Since");
                     ui.strong(format!("Avg ({})", crate::state::HISTORY_LEN));
                     ui.strong("");
                     ui.end_row();
@@ -412,6 +415,7 @@ impl StatoriusApp {
                         );
                         render_l2_phase_indicator(ui, entry.phase, &entry.duplicate_macs);
                         render_last_indicator(ui, &entry.last_result);
+                        render_since_indicator(ui, &entry.last_updated);
                         render_average_indicator(ui, &entry.history);
                         render_l2_pinger_controls(ui, &entry, &self.l2_pinger_tx);
                         ui.end_row();
@@ -574,7 +578,13 @@ impl eframe::App for StatoriusApp {
     // (`CentralPanel`, `Grid`, `ScrollArea`, ...) now take `&mut Ui` uniformly.
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         egui::CentralPanel::default().show(ui, |ui| {
-            render_tab_bar(ui, &mut self.active_tab, &self.l2_readiness);
+            render_tab_bar(
+                ui,
+                &mut self.active_tab,
+                &self.l2_readiness,
+                &self.l2_status,
+                &self.l2_tx,
+            );
             ui.separator();
 
             match self.active_tab {
@@ -593,13 +603,27 @@ impl eframe::App for StatoriusApp {
     }
 }
 
-/// The Ping / L2 Ping tab bar. "L2 Ping" is only selectable when L2 is at
-/// least theoretically possible on this system (`L2Readiness` isn't
-/// `Unavailable`) - the tab itself doesn't care whether L2 mode has actually
-/// been activated yet, only whether it *could* be; the tab's own content
-/// handles "not activated yet" separately (see `render_l2_checkbox` and the
-/// "Activate L2 mode above" message).
-fn render_tab_bar(ui: &mut egui::Ui, active_tab: &mut ActiveTab, readiness: &L2Readiness) {
+/// The Ping / L2 Ping tab bar, plus the "L2 mode" activation control
+/// right-aligned in the same row. "L2 Ping" is only selectable once L2 mode
+/// is actually `Active` - not merely theoretically possible - so there's
+/// nothing to show a "not activated yet" message for on the tab itself
+/// anymore (that used to live in `ui_l2_ping_tab`); flipping the checkbox
+/// here is now the only way in or out of that tab being reachable at all.
+fn render_tab_bar(
+    ui: &mut egui::Ui,
+    active_tab: &mut ActiveTab,
+    readiness: &L2Readiness,
+    l2_status: &SharedL2Status,
+    l2_tx: &mpsc::Sender<L2Command>,
+) {
+    let l2_tab_enabled = matches!(l2_status.get(), L2Status::Active { .. });
+    // If L2 mode gets deactivated (or fails) while the L2 Ping tab happens to
+    // be selected, fall back to the Ping tab rather than leaving the user
+    // stranded on a tab that's no longer clickable.
+    if !l2_tab_enabled && *active_tab == ActiveTab::L2Ping {
+        *active_tab = ActiveTab::Ping;
+    }
+
     ui.horizontal(|ui| {
         if ui
             .selectable_label(*active_tab == ActiveTab::Ping, "Ping")
@@ -608,7 +632,6 @@ fn render_tab_bar(ui: &mut egui::Ui, active_tab: &mut ActiveTab, readiness: &L2R
             *active_tab = ActiveTab::Ping;
         }
 
-        let l2_tab_enabled = !matches!(readiness, L2Readiness::Unavailable { .. });
         let l2_tab_hover = match readiness {
             L2Readiness::Unavailable { detail }
             | L2Readiness::Ready { detail }
@@ -637,6 +660,13 @@ fn render_tab_bar(ui: &mut egui::Ui, active_tab: &mut ActiveTab, readiness: &L2R
         {
             *active_tab = ActiveTab::Interfaces;
         }
+
+        // Right-aligned in the remaining space of this same row - add the
+        // left-hand tabs first, then let this claim what's left from the
+        // right edge inward, rather than giving it its own row.
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            render_l2_checkbox(ui, readiness, l2_status, l2_tx);
+        });
     });
 }
 
@@ -695,6 +725,34 @@ fn render_last_indicator(ui: &mut egui::Ui, last_result: &Option<PingResult>) {
             ui.colored_label(egui::Color32::from_rgb(210, 60, 60), "error")
                 .on_hover_text(e.as_str());
         }
+    }
+}
+
+/// Timer showing how long ago the last result was recorded, with second
+/// precision - refreshed every frame since this reads `Instant::elapsed()`
+/// directly rather than a value cached at receive-time. Shared by both the
+/// plain ping list and the L2 pinger list.
+fn render_since_indicator(ui: &mut egui::Ui, last_updated: &Option<Instant>) {
+    match last_updated {
+        None => {
+            ui.colored_label(egui::Color32::GRAY, "...");
+        }
+        Some(instant) => {
+            ui.label(format_elapsed(instant.elapsed()));
+        }
+    }
+}
+
+/// Renders a `Duration` as "Ns ago" / "Nm Ns ago" / "Nh Nm ago", truncated to
+/// whole seconds - matches the second-precision the "Since" column asks for.
+fn format_elapsed(elapsed: Duration) -> String {
+    let secs = elapsed.as_secs();
+    if secs < 60 {
+        format!("{secs}s ago")
+    } else if secs < 3600 {
+        format!("{}m {}s ago", secs / 60, secs % 60)
+    } else {
+        format!("{}h {}m ago", secs / 3600, (secs % 3600) / 60)
     }
 }
 
