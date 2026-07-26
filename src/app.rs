@@ -541,13 +541,13 @@ impl StatoriusApp {
                                 if let Some(tx) = iface.transmit_speed {
                                     ui.horizontal(|ui| {
                                         ui.strong("TX Speed:");
-                                        ui.label(format!("{} bps", tx));
+                                        ui.label(format_bps(tx));
                                     });
                                 }
                                 if let Some(rx) = iface.receive_speed {
                                     ui.horizontal(|ui| {
                                         ui.strong("RX Speed:");
-                                        ui.label(format!("{} bps", rx));
+                                        ui.label(format_bps(rx));
                                     });
                                 }
 
@@ -668,6 +668,28 @@ fn render_tab_bar(
             render_l2_checkbox(ui, readiness, l2_status, l2_tx);
         });
     });
+}
+
+/// Renders a bits-per-second speed as e.g. "1Gbps" instead of a raw bit
+/// count - steps up by factors of 1000 (bps -> Kbps -> ... -> Pbps, matching
+/// how link speeds are conventionally quoted, not binary Ki/Mi steps).
+/// Whole values print with no decimals; anything else keeps up to two,
+/// trimmed of trailing zeros.
+fn format_bps(bps: u64) -> String {
+    const UNITS: [&str; 6] = ["bps", "Kbps", "Mbps", "Gbps", "Tbps", "Pbps"];
+    let mut value = bps as f64;
+    let mut unit_idx = 0;
+    while value >= 1000.0 && unit_idx < UNITS.len() - 1 {
+        value /= 1000.0;
+        unit_idx += 1;
+    }
+    if value.fract() == 0.0 {
+        format!("{}{}", value as u64, UNITS[unit_idx])
+    } else {
+        let s = format!("{value:.2}");
+        let s = s.trim_end_matches('0').trim_end_matches('.');
+        format!("{s}{}", UNITS[unit_idx])
+    }
 }
 
 /// Parse "1.2.3.4/24" or "2001:db8::1/64" into (address, prefix length).
