@@ -18,6 +18,7 @@ enum ActiveTab {
     Ping,
     L2Ping,
     Interfaces,
+    About,
 }
 
 /// Live validation state for the L2 pinger add-form's *source* IP field:
@@ -567,9 +568,42 @@ impl StatoriusApp {
             }
         });
     }
+
+    /// Static license/copyright info - no state of its own, just text.
+    fn ui_about_tab(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Statorius");
+        ui.add_space(8.0);
+
+        ui.horizontal(|ui| {
+            ui.label("Copyright");
+            ui.strong("2026 Markus Bossert");
+        });
+        ui.hyperlink_to("https://github.com/tomboy-64/statorius/", "https://github.com/tomboy-64/statorius/");
+
+        ui.add_space(12.0);
+        ui.separator();
+        ui.add_space(12.0);
+
+        ui.label(
+            "This program is free software: you can redistribute it and/or modify \
+             it under the terms of the GNU Affero General Public License as published \
+             by the Free Software Foundation, either version 3 of the License, or (at \
+             your option) any later version.",
+        );
+        ui.add_space(6.0);
+        ui.label(
+            "This program is distributed in the hope that it will be useful, but \
+            WITHOUT ANY WARRANTY; without even the implied warranty of \
+            MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU \
+            Affero General Public License for more details.",
+        );
+        ui.add_space(12.0);
+        ui.hyperlink_to(
+            "Full license text (GNU AGPL v3.0)",
+            "https://www.gnu.org/licenses/agpl-3.0.html",
+        );
+    }
 }
-
-
 
 impl eframe::App for StatoriusApp {
     // eframe 0.35 split the old single `update(ctx, frame)` into an optional
@@ -591,6 +625,7 @@ impl eframe::App for StatoriusApp {
                 ActiveTab::Ping => self.ui_ping_tab(ui),
                 ActiveTab::L2Ping => self.ui_l2_ping_tab(ui),
                 ActiveTab::Interfaces => (&mut*self).ui_interfaces_tab(ui),
+                ActiveTab::About => (&mut*self).ui_about_tab(ui),
             }
         });
 
@@ -659,6 +694,13 @@ fn render_tab_bar(
             .clicked()
         {
             *active_tab = ActiveTab::Interfaces;
+        }
+
+        if ui
+            .selectable_label(*active_tab == ActiveTab::About, "About")
+           .clicked()
+        {
+            *active_tab = ActiveTab::About;
         }
 
         // Right-aligned in the remaining space of this same row - add the
