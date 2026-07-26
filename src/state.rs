@@ -134,7 +134,9 @@ impl SharedState {
         entry.history.push_back(sample);
 
         entry.last_result = Some(result);
-        entry.last_updated = Some(Instant::now());
+        if matches!(entry.last_result, Some(PingResult::Success(_))) {
+            entry.last_updated = Some(Instant::now());
+        }
     }
 
     /// Mark whether a target's continuous loop is currently active, so the UI

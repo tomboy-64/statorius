@@ -1,6 +1,6 @@
 [package]
 name = "statorius"
-version = "0.3.1"
+version = "0.3.5"
 edition = "2024"
 
 [profile.release]
