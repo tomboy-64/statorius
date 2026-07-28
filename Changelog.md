@@ -4,9 +4,13 @@ All notable changes to this project are documented in this file.
 
 ***Note***: Layer 2 Pings are still broken. Do not try to use that feature.
 
-- [todo] remove borders around DHCP messages (ugly)
 - [todo] next: implement domain name resolution attempt on ips for ping
 - [todo] next: implement storing/loading sets of ips to be pinged
+
+## [0.4.2]
+
+- remove borders around DHCP messages (ugly)
+- improve display of Option names - added help tooltips and data types
 - prettified DHCP output by removing blocks around Xiaddr entries
 - added description tooltips for all Options
 
