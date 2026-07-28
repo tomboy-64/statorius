@@ -120,8 +120,8 @@ fn render_dhcp_message(ui: &mut egui::Ui, xid: u32, index: usize, msg: &DhcpMess
 }
 
 /// `ciaddr`/`yiaddr`/`siaddr`/`giaddr` mean four different, easily-confused
-/// things - each shown here as its own small highlighted chip with the
-/// address in monospace and a hover tooltip spelling out what that
+/// things - shown inline as before, just in a slightly brighter shade than
+/// normal body text, with a hover tooltip on each spelling out what that
 /// particular field means and when it's actually set.
 fn render_address_highlights(ui: &mut egui::Ui, msg: &DhcpMessageWire) {
     const FIELDS: [(&str, &str); 4] = [
@@ -153,18 +153,16 @@ fn render_address_highlights(ui: &mut egui::Ui, msg: &DhcpMessageWire) {
         return;
     }
 
+    // A touch brighter than normal text, derived from the theme's own text
+    // color rather than a fixed one, so it still reads fine in both light
+    // and dark mode.
+    let highlight = ui.visuals().text_color().gamma_multiply(1.4);
+
     ui.horizontal(|ui| {
         for ((label, help), addr) in FIELDS.iter().zip(addrs.iter()) {
             let Some(addr) = addr else { continue };
-            egui::Frame::group(ui.style())
-                .fill(ui.visuals().widgets.inactive.bg_fill)
-                .show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new(*label).strong().monospace())
-                            .on_hover_text(*help);
-                        ui.monospace(addr.as_str());
-                    });
-                });
+            ui.label(egui::RichText::new(format!("{label} {addr}")).color(highlight))
+                .on_hover_text(*help);
         }
     });
 }
