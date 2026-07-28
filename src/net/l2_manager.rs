@@ -402,13 +402,26 @@ async fn start_session(
 }
 
 fn spawn_unprivileged(exe: &Path, endpoint: &str) -> std::io::Result<Child> {
-    Command::new(exe)
-        .arg("--l2-helper")
+    let mut cmd = Command::new(exe);
+    cmd.arg("--l2-helper")
         .arg(endpoint)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
+        .stderr(Stdio::null());
+
+    // Belt-and-suspenders alongside `main.rs`'s `windows_subsystem`
+    // attribute: that alone should already mean this process never gets a
+    // console, but setting the flag here too means this spawn is correct
+    // even if `exe` ever turns out to be something else's (still
+    // console-subsystem) binary.
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    cmd.spawn()
 }
 
 #[cfg(target_os = "linux")]

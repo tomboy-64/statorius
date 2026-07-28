@@ -9,7 +9,7 @@ use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
 
 use windows_sys::Win32::UI::Shell::ShellExecuteW;
-use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+use windows_sys::Win32::UI::WindowsAndMessaging::SW_HIDE;
 
 fn to_wide(s: &str) -> Vec<u16> {
     OsStr::new(s)
@@ -35,7 +35,15 @@ pub fn shell_execute_runas(exe: &Path, args: &str) -> Result<(), String> {
             file.as_ptr(),
             params.as_ptr(),
             std::ptr::null(),
-            SW_SHOWNORMAL,
+            // The helper is headless (no window of its own to show) - this
+            // only matters pre-0.4.1, before `main.rs` marked the whole
+            // binary as the "windows" subsystem: without it, the OS would
+            // otherwise hand the re-exec'd `--l2-helper` process its own
+            // console window regardless of `SW_HIDE`'s ancestor here, since
+            // subsystem console allocation isn't controlled by `nShowCmd`.
+            // Kept as `SW_HIDE` (rather than reverting to `SW_SHOWNORMAL`)
+            // as a second layer of defense either way.
+            SW_HIDE,
         )
     };
 

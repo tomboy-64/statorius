@@ -1,6 +1,6 @@
 [package]
 name = "statorius"
-version = "0.4.0"
+version = "0.4.1"
 edition = "2024"
 
 [profile.release]
@@ -36,6 +36,7 @@ pnet_base = "0.35"
 # Wire format for the GUI <-> elevated L2 helper IPC protocol
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
+windows-sys = "0.61.2"
 
 # Windows-only: ShellExecuteW's "runas" verb, to UAC-elevate the L2 helper
 [target.'cfg(windows)'.dependencies]

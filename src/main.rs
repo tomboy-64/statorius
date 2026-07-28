@@ -1,3 +1,10 @@
+// Release builds have no console window at all - both the GUI and the
+// re-exec'd `--l2-helper` process (it's the same binary) would otherwise
+// each get one from Windows, and the helper's has to stay open for as long
+// as L2 mode is active. Left as the default (console-subsystem) in debug
+// builds, so `cargo run`'s stdout/stderr still show up somewhere.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 mod app;
 mod net;
 mod state;
