@@ -5,7 +5,7 @@ use super::StatoriusApp;
 impl StatoriusApp {
     /// Static license/copyright info - no state of its own, just text.
     pub(super) fn ui_about_tab(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Statorius");
+        ui.heading(concat!("Statorius ", env!("CARGO_PKG_VERSION")));
         ui.add_space(8.0);
 
         ui.horizontal(|ui| {
