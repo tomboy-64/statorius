@@ -37,5 +37,11 @@ impl StatoriusApp {
                  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.",
             );
         });
+        ui.add_space(6.0);
+        ui.horizontal_wrapped(|ui| {
+            ui.label(
+                "In order to accelerate Code Production, I make heave use of LLMs (notably Claude and Gemini)."
+            );
+        });
     }
 }
