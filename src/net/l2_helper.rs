@@ -45,16 +45,26 @@ pub async fn run_l2_helper(endpoint: String) {
         Err(reason) => L2Message::Failed { reason },
     };
     let ready = matches!(outcome, L2Message::Ready { .. });
-    if send(&writer, &outcome).await.is_err() {
-        eprintln!("l2-helper: failed to report status to the GUI");
-        return;
-    }
     if !ready {
+        let _ = send(&writer, &outcome).await;
         return;
     }
 
     let job_tx = l2_engine::spawn_engine();
-    let mut dhcp_rx = dhcp_sniffer::spawn_dhcp_sniffer();
+    let (mut dhcp_rx, dhcp_ready) = dhcp_sniffer::spawn_dhcp_sniffer();
+
+    // Deliberately block *before* telling the GUI L2 mode is ready: the
+    // checkbox flipping to "Active" is the user's cue that it's now safe
+    // to generate traffic, so DHCP capture needs to have actually settled
+    // (opened, or failed to) by that point - not still resolving the
+    // interface/opening pcap on another thread. See `spawn_dhcp_sniffer`'s
+    // doc comment for what this closes.
+    let _ = dhcp_ready.await;
+
+    if send(&writer, &outcome).await.is_err() {
+        eprintln!("l2-helper: failed to report status to the GUI");
+        return;
+    }
 
     loop {
         tokio::select! {

@@ -31,13 +31,17 @@ const CHADDR_RANGE: Range<usize> = 28..44;
 const SNAME_RANGE: Range<usize> = 44..108;
 const FILE_RANGE: Range<usize> = 108..236;
 
-/// One decoded option, ready for the UI - `name` and `value` are both
-/// already human-readable strings, so the GUI side never needs to know
-/// anything about DHCP itself.
+/// One decoded option, ready for the UI - `name`, `data_type` and `value`
+/// are all already human-readable strings, so the GUI side never needs to
+/// know anything about DHCP itself.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DhcpOptionWire {
     pub code: u8,
     pub name: String,
+    /// How this option is encoded on the wire (e.g. "IPv4 address (4
+    /// bytes)", "unsigned 8-bit integer") - derived from the same `format`
+    /// hint used to render `value`, so the two never disagree.
+    pub data_type: String,
     pub value: String,
 }
 
@@ -233,6 +237,15 @@ struct OptionDef {
     name: String,
     #[serde(default)]
     format: Option<String>,
+    /// The standard this option is defined in (e.g. "RFC 3442"). `None`
+    /// for options where that isn't confidently recorded yet - see the
+    /// comment at the top of `dhcp_options.json`.
+    #[serde(default)]
+    rfc: Option<String>,
+    /// A one-line explainer of what the option means, for the same
+    /// tooltip `rfc` feeds.
+    #[serde(default)]
+    description: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -283,23 +296,74 @@ fn message_type_name(code: u8) -> String {
         .unwrap_or_else(|| format!("Unknown ({code})"))
 }
 
-/// Decode one raw option into its display name/value, using the bundled
-/// lookup table for the name and (if present) a `format` hint for the
-/// value. A code the table doesn't list at all (shouldn't normally happen -
-/// the table aims to cover every IANA-registered tag) still gets a usable
-/// fallback rather than being dropped.
+/// A short explainer plus the standard an option is defined in, for the
+/// hover tooltip on that option's name in the UI - `None` if the lookup
+/// table doesn't have that information for this code yet (most of RFC
+/// 2132 and the well-known later options do; a few obscure/legacy ones are
+/// deliberately left blank rather than guessing at an RFC number).
+pub fn option_help(code: u8) -> Option<String> {
+    let def = lookup().options.get(&code)?;
+    match (&def.description, &def.rfc) {
+        (Some(desc), Some(rfc)) => Some(format!("{desc}\n\n{rfc}")),
+        (Some(desc), None) => Some(desc.clone()),
+        (None, Some(rfc)) => Some(rfc.clone()),
+        (None, None) => None,
+    }
+}
+
+/// How a `format` hint (see `format_value`) is actually encoded on the
+/// wire - shown as its own column in the UI, right next to the decoded
+/// value. Kept in lock-step with `format_value` deliberately: every match
+/// arm there has a corresponding one here, so the two can never describe
+/// different encodings for the same option.
+fn type_label(format: Option<&str>) -> String {
+    match format {
+        Some("empty") => "none".to_owned(),
+        Some("ipv4") => "IPv4 address (4 bytes)".to_owned(),
+        Some("ipv4-list") => "list of IPv4 addresses (4 bytes each)".to_owned(),
+        Some("string") => "string (ASCII/UTF-8, not null-terminated)".to_owned(),
+        Some("bool") => "boolean (1 byte, 0 = no / nonzero = yes)".to_owned(),
+        Some("u8") => "unsigned 8-bit integer".to_owned(),
+        Some("u16") => "unsigned 16-bit integer (big-endian)".to_owned(),
+        Some("u32") => "unsigned 32-bit integer (big-endian)".to_owned(),
+        Some("i32") => "signed 32-bit integer (big-endian)".to_owned(),
+        Some("duration-secs") => "unsigned 32-bit integer (big-endian, seconds)".to_owned(),
+        Some("message-type") => "unsigned 8-bit integer (enumerated)".to_owned(),
+        Some("option-code-list") => "list of 8-bit option codes".to_owned(),
+        // "hex"/unrecognized/absent - `format_value` falls back to a hex
+        // dump for exactly these same cases.
+        _ => "raw bytes".to_owned(),
+    }
+}
+
+/// Decode one raw option into its display name/type/value, using the
+/// bundled lookup table for the name and (if present) a `format` hint for
+/// both the type label and the value. A code the table doesn't list at all
+/// (shouldn't normally happen - the table aims to cover every
+/// IANA-registered tag) still gets a usable fallback rather than being
+/// dropped.
 fn decode_option(code: u8, raw: &[u8]) -> DhcpOptionWire {
-    let (name, value) = match lookup().options.get(&code) {
+    let (name, data_type, value) = match lookup().options.get(&code) {
         Some(def) => {
-            let value = match def.format.as_deref() {
+            let format = def.format.as_deref();
+            let value = match format {
                 Some(format) => format_value(format, raw),
                 None => format_hex(raw),
             };
-            (def.name.clone(), value)
+            (def.name.clone(), type_label(format), value)
         }
-        None => (format!("Unknown option {code}"), format_hex(raw)),
+        None => (
+            format!("Unknown option {code}"),
+            type_label(None),
+            format_hex(raw),
+        ),
     };
-    DhcpOptionWire { code, name, value }
+    DhcpOptionWire {
+        code,
+        name,
+        data_type,
+        value,
+    }
 }
 
 /// Render one option's raw bytes according to its lookup-table `format`

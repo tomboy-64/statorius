@@ -1,5 +1,5 @@
 {
-  "_comment": "DHCP/BOOTP option and message-type names, sourced from the IANA 'BOOTP Vendor Extensions and DHCP Options' and 'DHCP Message Type 53 Values' registries (https://www.iana.org/assignments/bootp-dhcp-parameters/). Every option here has a correct `name`; only some also have a `format` hint telling dhcp.rs how to render its value (ipv4 / ipv4-list / string / u8 / u16 / u32 / i32 / bool / duration-secs / message-type / option-code-list / empty). Options without a `format` (or with an unrecognized one) fall back to a plain hex dump - safe, but not pretty. Add a `format` here to improve decoding for a given option; no Rust changes needed.",
+  "_comment": "DHCP/BOOTP option and message-type names, sourced from the IANA 'BOOTP Vendor Extensions and DHCP Options' and 'DHCP Message Type 53 Values' registries (https://www.iana.org/assignments/bootp-dhcp-parameters/). Every option here has a correct `name`; `format` (see dhcp.rs's format_value) tells the UI how to render its value - options without one fall back to a hex dump. `description` + `rfc` (an option's defining standard) drive the hover tooltip on the option name in the DHCP tab; both are only set where confidently known - an option missing them just shows no tooltip rather than risking a wrong citation. Add/improve any of these fields here; no Rust changes needed.",
   "message_types": [
     {
       "code": 1,
@@ -78,545 +78,773 @@
     {
       "code": 0,
       "name": "Pad",
-      "format": "empty"
+      "format": "empty",
+      "rfc": "RFC 2132",
+      "description": "No-op padding byte between options - carries no data."
     },
     {
       "code": 1,
       "name": "Subnet Mask",
-      "format": "ipv4"
+      "format": "ipv4",
+      "rfc": "RFC 2132",
+      "description": "The client's subnet mask."
     },
     {
       "code": 2,
       "name": "Time Offset",
-      "format": "i32"
+      "format": "i32",
+      "rfc": "RFC 2132",
+      "description": "Client's time zone offset from UTC, in seconds (deprecated by RFC 4833 in favor of options 100/101)."
     },
     {
       "code": 3,
       "name": "Router",
-      "format": "ipv4-list"
+      "format": "ipv4-list",
+      "rfc": "RFC 2132",
+      "description": "Default gateway(s) for the client, in order of preference."
     },
     {
       "code": 4,
       "name": "Time Server",
-      "format": "ipv4-list"
+      "format": "ipv4-list",
+      "rfc": "RFC 2132",
+      "description": "RFC 868 Time Protocol servers."
     },
     {
       "code": 5,
       "name": "Name Server",
-      "format": "ipv4-list"
+      "format": "ipv4-list",
+      "rfc": "RFC 2132",
+      "description": "IEN 116 name servers (legacy, not DNS)."
     },
     {
       "code": 6,
       "name": "Domain Server",
-      "format": "ipv4-list"
+      "format": "ipv4-list",
+      "rfc": "RFC 2132",
+      "description": "DNS servers for the client to use."
     },
     {
       "code": 7,
       "name": "Log Server",
-      "format": "ipv4-list"
+      "format": "ipv4-list",
+      "rfc": "RFC 2132",
+      "description": "RFC 3164 syslog servers."
     },
     {
       "code": 8,
       "name": "Quotes Server",
-      "format": "ipv4-list"
+      "format": "ipv4-list",
+      "rfc": "RFC 2132",
+      "description": "RFC 865 'Quote of the Day' servers."
     },
     {
       "code": 9,
       "name": "LPR Server",
-      "format": "ipv4-list"
+      "format": "ipv4-list",
+      "rfc": "RFC 2132",
+      "description": "RFC 1179 line-printer servers."
     },
     {
       "code": 10,
       "name": "Impress Server",
-      "format": "ipv4-list"
+      "format": "ipv4-list",
+      "rfc": "RFC 2132",
+      "description": "Imagen Impress print servers (obsolete)."
     },
     {
       "code": 11,
       "name": "RLP Server",
-      "format": "ipv4-list"
+      "format": "ipv4-list",
+      "rfc": "RFC 2132",
+      "description": "Resource Location Protocol servers (obsolete)."
     },
     {
       "code": 12,
       "name": "Hostname",
-      "format": "string"
+      "format": "string",
+      "rfc": "RFC 2132",
+      "description": "The client's requested or assigned hostname."
     },
     {
       "code": 13,
       "name": "Boot File Size",
-      "format": "u16"
+      "format": "u16",
+      "rfc": "RFC 2132",
+      "description": "Size of the default boot image, in 512-byte blocks."
     },
     {
       "code": 14,
       "name": "Merit Dump File",
-      "format": "string"
+      "format": "string",
+      "rfc": "RFC 2132",
+      "description": "Path to a file where the client should dump a crash/debug core."
     },
     {
       "code": 15,
       "name": "Domain Name",
-      "format": "string"
+      "format": "string",
+      "rfc": "RFC 2132",
+      "description": "The client's DNS domain, for resolving unqualified hostnames."
     },
     {
       "code": 16,
       "name": "Swap Server",
-      "format": "ipv4"
+      "format": "ipv4",
+      "rfc": "RFC 2132",
+      "description": "Address of the client's swap server (diskless clients)."
     },
     {
       "code": 17,
       "name": "Root Path",
-      "format": "string"
+      "format": "string",
+      "rfc": "RFC 2132",
+      "description": "NFS path to the client's root filesystem (diskless clients)."
     },
     {
       "code": 18,
       "name": "Extension File",
-      "format": "string"
+      "format": "string",
+      "rfc": "RFC 2132",
+      "description": "Path to a file with further BOOTP vendor extensions to load."
     },
     {
       "code": 19,
       "name": "IP Forwarding",
-      "format": "bool"
+      "format": "bool",
+      "rfc": "RFC 2132",
+      "description": "Whether the client should enable IP forwarding."
     },
     {
       "code": 20,
       "name": "Non-Local Source Routing",
-      "format": "bool"
+      "format": "bool",
+      "rfc": "RFC 2132",
+      "description": "Whether the client should accept non-local source-routed packets."
     },
     {
       "code": 21,
-      "name": "Policy Filter"
+      "name": "Policy Filter",
+      "rfc": "RFC 2132",
+      "description": "Destination/mask pairs the client should use to filter non-local source routes."
     },
     {
       "code": 22,
       "name": "Max Datagram Reassembly",
-      "format": "u16"
+      "format": "u16",
+      "rfc": "RFC 2132",
+      "description": "Largest datagram size the client should be prepared to reassemble."
     },
     {
       "code": 23,
       "name": "Default IP TTL",
-      "format": "u8"
+      "format": "u8",
+      "rfc": "RFC 2132",
+      "description": "Default TTL the client should use on outgoing packets."
     },
     {
       "code": 24,
       "name": "Path MTU Aging Timeout",
-      "format": "duration-secs"
+      "format": "duration-secs",
+      "rfc": "RFC 2132",
+      "description": "Timeout for aging Path MTU Discovery (RFC 1191) values."
     },
     {
       "code": 25,
-      "name": "Path MTU Plateau Table"
+      "name": "Path MTU Plateau Table",
+      "rfc": "RFC 2132",
+      "description": "MTU sizes to try during Path MTU Discovery."
     },
     {
       "code": 26,
       "name": "Interface MTU",
-      "format": "u16"
+      "format": "u16",
+      "rfc": "RFC 2132",
+      "description": "MTU the client should use on its interface."
     },
     {
       "code": 27,
       "name": "All Subnets Are Local",
-      "format": "bool"
+      "format": "bool",
+      "rfc": "RFC 2132",
+      "description": "Whether all subnets of the client's network are directly reachable."
     },
     {
       "code": 28,
       "name": "Broadcast Address",
-      "format": "ipv4"
+      "format": "ipv4",
+      "rfc": "RFC 2132",
+      "description": "The broadcast address to use on the client's subnet."
     },
     {
       "code": 29,
       "name": "Perform Mask Discovery",
-      "format": "bool"
+      "format": "bool",
+      "rfc": "RFC 2132",
+      "description": "Whether the client should use ICMP Mask Discovery (RFC 950)."
     },
     {
       "code": 30,
       "name": "Mask Supplier",
-      "format": "bool"
+      "format": "bool",
+      "rfc": "RFC 2132",
+      "description": "Whether the client should respond to ICMP Mask Discovery requests."
     },
     {
       "code": 31,
       "name": "Perform Router Discovery",
-      "format": "bool"
+      "format": "bool",
+      "rfc": "RFC 2132",
+      "description": "Whether the client should use Router Discovery (RFC 1256)."
     },
     {
       "code": 32,
       "name": "Router Solicitation Address",
-      "format": "ipv4"
+      "format": "ipv4",
+      "rfc": "RFC 2132",
+      "description": "Address the client should use for Router Solicitation."
     },
     {
       "code": 33,
-      "name": "Static Route"
+      "name": "Static Route",
+      "rfc": "RFC 2132",
+      "description": "Destination/router pairs for static routes (superseded by option 121's classless routes)."
     },
     {
       "code": 34,
       "name": "Trailer Encapsulation",
-      "format": "bool"
+      "format": "bool",
+      "rfc": "RFC 2132",
+      "description": "Whether the client should negotiate trailer encapsulation (RFC 893)."
     },
     {
       "code": 35,
       "name": "ARP Cache Timeout",
-      "format": "duration-secs"
+      "format": "duration-secs",
+      "rfc": "RFC 2132",
+      "description": "Timeout for entries in the client's ARP cache."
     },
     {
       "code": 36,
       "name": "Ethernet Encapsulation",
-      "format": "bool"
+      "format": "bool",
+      "rfc": "RFC 2132",
+      "description": "Whether to use RFC 894 or RFC 1042 Ethernet encapsulation."
     },
     {
       "code": 37,
       "name": "Default TCP TTL",
-      "format": "u8"
+      "format": "u8",
+      "rfc": "RFC 2132",
+      "description": "Default TTL the client should use for outgoing TCP segments."
     },
     {
       "code": 38,
       "name": "TCP Keepalive Interval",
-      "format": "duration-secs"
+      "format": "duration-secs",
+      "rfc": "RFC 2132",
+      "description": "Interval for the client to send TCP keepalive messages."
     },
     {
       "code": 39,
       "name": "TCP Keepalive Garbage",
-      "format": "bool"
+      "format": "bool",
+      "rfc": "RFC 2132",
+      "description": "Whether TCP keepalive messages should include a garbage octet (legacy interop)."
     },
     {
       "code": 40,
       "name": "NIS Domain",
-      "format": "string"
+      "format": "string",
+      "rfc": "RFC 2132",
+      "description": "The client's Network Information Service (NIS) domain."
     },
     {
       "code": 41,
       "name": "NIS Servers",
-      "format": "ipv4-list"
+      "format": "ipv4-list",
+      "rfc": "RFC 2132",
+      "description": "NIS servers for the client's domain."
     },
     {
       "code": 42,
       "name": "NTP Servers",
-      "format": "ipv4-list"
+      "format": "ipv4-list",
+      "rfc": "RFC 2132",
+      "description": "NTP servers for the client to synchronize time with."
     },
     {
       "code": 43,
-      "name": "Vendor Specific Information"
+      "name": "Vendor Specific Information",
+      "rfc": "RFC 2132",
+      "description": "Opaque, vendor-defined data - format depends entirely on the vendor."
     },
     {
       "code": 44,
       "name": "NetBIOS Name Server",
-      "format": "ipv4-list"
+      "format": "ipv4-list",
+      "rfc": "RFC 2132",
+      "description": "WINS/NetBIOS name servers."
     },
     {
       "code": 45,
       "name": "NetBIOS Datagram Distribution Server",
-      "format": "ipv4-list"
+      "format": "ipv4-list",
+      "rfc": "RFC 2132",
+      "description": "NetBIOS datagram distribution servers."
     },
     {
       "code": 46,
       "name": "NetBIOS Node Type",
-      "format": "u8"
+      "format": "u8",
+      "rfc": "RFC 2132",
+      "description": "NetBIOS node type (b/p/m/h-node)."
     },
     {
       "code": 47,
       "name": "NetBIOS Scope",
-      "format": "string"
+      "format": "string",
+      "rfc": "RFC 2132",
+      "description": "The client's NetBIOS scope ID."
     },
     {
       "code": 48,
       "name": "X Window Font Server",
-      "format": "ipv4-list"
+      "format": "ipv4-list",
+      "rfc": "RFC 2132",
+      "description": "X Window System font servers."
     },
     {
       "code": 49,
       "name": "X Window Display Manager",
-      "format": "ipv4-list"
+      "format": "ipv4-list",
+      "rfc": "RFC 2132",
+      "description": "X Window System display manager servers."
     },
     {
       "code": 50,
       "name": "Requested IP Address",
-      "format": "ipv4"
+      "format": "ipv4",
+      "rfc": "RFC 2132",
+      "description": "Address the client is requesting, typically in a DISCOVER or REQUEST."
     },
     {
       "code": 51,
       "name": "IP Address Lease Time",
-      "format": "duration-secs"
+      "format": "duration-secs",
+      "rfc": "RFC 2132",
+      "description": "How long the offered/assigned address is valid for."
     },
     {
       "code": 52,
       "name": "Option Overload",
-      "format": "u8"
+      "format": "u8",
+      "rfc": "RFC 2132",
+      "description": "Signals that the legacy 'sname'/'file' header fields are reused to carry more options."
     },
     {
       "code": 53,
       "name": "DHCP Message Type",
-      "format": "message-type"
+      "format": "message-type",
+      "rfc": "RFC 2132",
+      "description": "Which DHCP message this is (DISCOVER, OFFER, REQUEST, ACK, ...)."
     },
     {
       "code": 54,
       "name": "DHCP Server Identifier",
-      "format": "ipv4"
+      "format": "ipv4",
+      "rfc": "RFC 2132",
+      "description": "Identifies which server sent this, or which server a REQUEST is directed to."
     },
     {
       "code": 55,
       "name": "Parameter Request List",
-      "format": "option-code-list"
+      "format": "option-code-list",
+      "rfc": "RFC 2132",
+      "description": "Options the client is asking the server to include in its reply."
     },
     {
       "code": 56,
       "name": "DHCP Message",
-      "format": "string"
+      "format": "string",
+      "rfc": "RFC 2132",
+      "description": "Human-readable text, typically explaining a NAK."
     },
     {
       "code": 57,
       "name": "Maximum DHCP Message Size",
-      "format": "u16"
+      "format": "u16",
+      "rfc": "RFC 2132",
+      "description": "Largest DHCP message the client can accept."
     },
     {
       "code": 58,
       "name": "Renewal (T1) Time Value",
-      "format": "duration-secs"
+      "format": "duration-secs",
+      "rfc": "RFC 2132",
+      "description": "When the client should start trying to renew with the original server."
     },
     {
       "code": 59,
       "name": "Rebinding (T2) Time Value",
-      "format": "duration-secs"
+      "format": "duration-secs",
+      "rfc": "RFC 2132",
+      "description": "When the client should start trying to rebind with any server."
     },
     {
       "code": 60,
       "name": "Vendor Class Identifier",
-      "format": "string"
+      "format": "string",
+      "rfc": "RFC 2132",
+      "description": "Identifies the client's vendor/type, e.g. for PXE clients."
     },
     {
       "code": 61,
-      "name": "Client Identifier"
+      "name": "Client Identifier",
+      "rfc": "RFC 2132",
+      "description": "A unique identifier the server uses for this client's lease, instead of its MAC address."
     },
     {
       "code": 62,
       "name": "NetWare/IP Domain",
-      "format": "string"
+      "format": "string",
+      "rfc": "RFC 2242",
+      "description": "The client's NetWare/IP domain name."
     },
     {
       "code": 63,
-      "name": "NetWare/IP Option"
+      "name": "NetWare/IP Option",
+      "rfc": "RFC 2242",
+      "description": "NetWare/IP-specific sub-options."
     },
     {
       "code": 64,
       "name": "NIS+ Domain",
-      "format": "string"
+      "format": "string",
+      "rfc": "RFC 2132",
+      "description": "The client's NIS+ domain."
     },
     {
       "code": 65,
       "name": "NIS+ Servers",
-      "format": "ipv4-list"
+      "format": "ipv4-list",
+      "rfc": "RFC 2132",
+      "description": "NIS+ servers for the client's domain."
     },
     {
       "code": 66,
       "name": "TFTP Server Name",
-      "format": "string"
+      "format": "string",
+      "rfc": "RFC 2132",
+      "description": "Name/address of the TFTP server for the next stage of booting."
     },
     {
       "code": 67,
       "name": "Bootfile Name",
-      "format": "string"
+      "format": "string",
+      "rfc": "RFC 2132",
+      "description": "Name of the boot file to load from the TFTP server."
     },
     {
       "code": 68,
       "name": "Home Agent Addresses",
-      "format": "ipv4-list"
+      "format": "ipv4-list",
+      "rfc": "RFC 2132",
+      "description": "Mobile IP home agent addresses."
     },
     {
       "code": 69,
       "name": "SMTP Server",
-      "format": "ipv4-list"
+      "format": "ipv4-list",
+      "rfc": "RFC 2132",
+      "description": "SMTP mail servers."
     },
     {
       "code": 70,
       "name": "POP3 Server",
-      "format": "ipv4-list"
+      "format": "ipv4-list",
+      "rfc": "RFC 2132",
+      "description": "POP3 mail servers."
     },
     {
       "code": 71,
       "name": "NNTP Server",
-      "format": "ipv4-list"
+      "format": "ipv4-list",
+      "rfc": "RFC 2132",
+      "description": "NNTP news servers."
     },
     {
       "code": 72,
       "name": "WWW Server",
-      "format": "ipv4-list"
+      "format": "ipv4-list",
+      "rfc": "RFC 2132",
+      "description": "Default WWW servers."
     },
     {
       "code": 73,
       "name": "Finger Server",
-      "format": "ipv4-list"
+      "format": "ipv4-list",
+      "rfc": "RFC 2132",
+      "description": "Finger protocol servers."
     },
     {
       "code": 74,
       "name": "IRC Server",
-      "format": "ipv4-list"
+      "format": "ipv4-list",
+      "rfc": "RFC 2132",
+      "description": "IRC servers."
     },
     {
       "code": 75,
       "name": "StreetTalk Server",
-      "format": "ipv4-list"
+      "format": "ipv4-list",
+      "rfc": "RFC 2132",
+      "description": "StreetTalk servers (obsolete directory service)."
     },
     {
       "code": 76,
       "name": "StreetTalk Directory Assistance Server",
-      "format": "ipv4-list"
+      "format": "ipv4-list",
+      "rfc": "RFC 2132",
+      "description": "StreetTalk Directory Assistance servers."
     },
     {
       "code": 77,
-      "name": "User Class"
+      "name": "User Class",
+      "rfc": "RFC 3004",
+      "description": "Identifies a class of client, letting the server group clients (e.g. VoIP phones vs. laptops)."
     },
     {
       "code": 78,
-      "name": "Directory Agent"
+      "name": "Directory Agent",
+      "rfc": "RFC 2610",
+      "description": "Service Location Protocol (SLP) directory agents."
     },
     {
       "code": 79,
-      "name": "Service Scope"
+      "name": "Service Scope",
+      "rfc": "RFC 2610",
+      "description": "SLP scope the client should use."
     },
     {
       "code": 80,
       "name": "Rapid Commit",
-      "format": "empty"
+      "format": "empty",
+      "rfc": "RFC 4039",
+      "description": "Requests/confirms the abbreviated DISCOVER-ACK exchange, skipping OFFER/REQUEST."
     },
     {
       "code": 81,
-      "name": "Client FQDN"
+      "name": "Client FQDN",
+      "rfc": "RFC 4702",
+      "description": "The client's fully-qualified domain name, and who (client or server) should update DNS for it."
     },
     {
       "code": 82,
-      "name": "Relay Agent Information"
+      "name": "Relay Agent Information",
+      "rfc": "RFC 3046",
+      "description": "Sub-options a relay agent inserts (e.g. Circuit ID/Remote ID) to identify where a request came from."
     },
     {
       "code": 83,
-      "name": "iSNS"
+      "name": "iSNS",
+      "rfc": "RFC 4174",
+      "description": "Internet Storage Name Service server information."
     },
     {
       "code": 85,
       "name": "NDS Servers",
-      "format": "ipv4-list"
+      "format": "ipv4-list",
+      "rfc": "RFC 2241",
+      "description": "Novell Directory Services (NDS) servers."
     },
     {
       "code": 86,
       "name": "NDS Tree Name",
-      "format": "string"
+      "format": "string",
+      "rfc": "RFC 2241",
+      "description": "The client's NDS tree name."
     },
     {
       "code": 87,
       "name": "NDS Context",
-      "format": "string"
+      "format": "string",
+      "rfc": "RFC 2241",
+      "description": "The client's initial NDS context."
     },
     {
       "code": 88,
-      "name": "BCMCS Controller Domain Name List"
+      "name": "BCMCS Controller Domain Name List",
+      "rfc": "RFC 4280",
+      "description": "Broadcast/Multicast Service Controller domain names (cellular networks)."
     },
     {
       "code": 89,
       "name": "BCMCS Controller IPv4 Address",
-      "format": "ipv4-list"
+      "format": "ipv4-list",
+      "rfc": "RFC 4280",
+      "description": "Broadcast/Multicast Service Controller addresses."
     },
     {
       "code": 90,
-      "name": "Authentication"
+      "name": "Authentication",
+      "rfc": "RFC 3118",
+      "description": "Cryptographic authentication of DHCP messages between client and server."
     },
     {
       "code": 91,
       "name": "Client Last Transaction Time",
-      "format": "u32"
+      "format": "u32",
+      "rfc": "RFC 4388",
+      "description": "Used with Leasequery: how long ago the client's last transaction was."
     },
     {
       "code": 92,
       "name": "Associated IP",
-      "format": "ipv4-list"
+      "format": "ipv4-list",
+      "rfc": "RFC 4388",
+      "description": "Used with Leasequery: other addresses associated with the queried client/lease."
     },
     {
       "code": 93,
-      "name": "Client System Architecture"
+      "name": "Client System Architecture",
+      "rfc": "RFC 4578",
+      "description": "The client's CPU/firmware architecture (e.g. BIOS x86, UEFI x64), for PXE network boot."
     },
     {
       "code": 94,
-      "name": "Client Network Device Interface"
+      "name": "Client Network Device Interface",
+      "rfc": "RFC 4578",
+      "description": "The client's network boot interface type and version (e.g. UNDI), for PXE."
     },
     {
       "code": 97,
-      "name": "UUID/GUID-based Client Identifier"
+      "name": "UUID/GUID-based Client Identifier",
+      "rfc": "RFC 4578",
+      "description": "A UUID/GUID identifying the client, common with PXE firmware."
     },
     {
       "code": 98,
       "name": "User Authentication (Open Group)",
-      "format": "string"
+      "format": "string",
+      "rfc": "The Open Group Technical Standard (1998)",
+      "description": "Remote user authentication information, per an Open Group (not IETF) specification."
     },
     {
       "code": 99,
-      "name": "GeoConf Civic"
+      "name": "GeoConf Civic",
+      "rfc": "RFC 4776",
+      "description": "Civic (street-address-style) location information for the client."
     },
     {
       "code": 100,
       "name": "PCode (POSIX TZ String)",
-      "format": "string"
+      "format": "string",
+      "rfc": "RFC 4833",
+      "description": "The client's POSIX TZ environment-variable string, for timezone configuration."
     },
     {
       "code": 101,
       "name": "TCode (TZ Database Reference)",
-      "format": "string"
+      "format": "string",
+      "rfc": "RFC 4833",
+      "description": "The client's IANA Time Zone Database (Olson) name, for timezone configuration."
     },
     {
       "code": 108,
       "name": "IPv6-Only Preferred",
-      "format": "duration-secs"
+      "format": "duration-secs",
+      "rfc": "RFC 8925",
+      "description": "How long the client should wait before falling back to IPv4 on an IPv6-mostly network."
     },
     {
       "code": 109,
-      "name": "DHCPv4 over DHCPv6 Softwire Source Address"
+      "name": "DHCPv4 over DHCPv6 Softwire Source Address",
+      "rfc": "RFC 8539",
+      "description": "Softwire source address used in DHCPv4-over-DHCPv6 provisioning."
     },
     {
       "code": 112,
       "name": "NetInfo Parent Server Address",
-      "format": "ipv4-list"
+      "format": "ipv4-list",
+      "rfc": "RFC 3679",
+      "description": "Apple NetInfo parent server address (legacy macOS directory service)."
     },
     {
       "code": 113,
       "name": "NetInfo Parent Server Tag",
-      "format": "string"
+      "format": "string",
+      "rfc": "RFC 3679",
+      "description": "Apple NetInfo parent server tag."
     },
     {
       "code": 114,
       "name": "DHCP Captive-Portal",
-      "format": "string"
+      "format": "string",
+      "rfc": "RFC 8910",
+      "description": "URI of a captive portal the client is currently behind."
     },
     {
       "code": 116,
       "name": "Auto-Configure",
-      "format": "bool"
+      "format": "bool",
+      "rfc": "RFC 2563",
+      "description": "Tells the client whether it should attempt IPv4 link-local auto-configuration."
     },
     {
       "code": 117,
-      "name": "Name Service Search"
+      "name": "Name Service Search",
+      "rfc": "RFC 2937",
+      "description": "Order in which the client should query different name-service types."
     },
     {
       "code": 118,
       "name": "Subnet Selection Option",
-      "format": "ipv4"
+      "format": "ipv4",
+      "rfc": "RFC 3011",
+      "description": "Lets a relay agent/client indicate which subnet an address should come from."
     },
     {
       "code": 119,
-      "name": "Domain Search"
+      "name": "Domain Search",
+      "rfc": "RFC 3397",
+      "description": "DNS search suffix list, for resolving unqualified hostnames."
     },
     {
       "code": 120,
-      "name": "SIP Servers"
+      "name": "SIP Servers",
+      "rfc": "RFC 3361",
+      "description": "SIP outbound proxy servers for the client."
     },
     {
       "code": 121,
-      "name": "Classless Static Route"
+      "name": "Classless Static Route",
+      "rfc": "RFC 3442",
+      "description": "Static routes as (prefix, router) pairs, replacing option 33 with CIDR-style prefixes."
     },
     {
       "code": 122,
-      "name": "CableLabs Client Configuration"
+      "name": "CableLabs Client Configuration",
+      "rfc": "RFC 3495",
+      "description": "CableLabs-specific configuration for cable modems/eDVAs."
     },
     {
       "code": 123,
-      "name": "GeoConf"
+      "name": "GeoConf",
+      "rfc": "RFC 6225",
+      "description": "Coordinate-based (latitude/longitude) location information for the client."
     },
     {
       "code": 124,
-      "name": "Vendor-Identifying Vendor Class"
+      "name": "Vendor-Identifying Vendor Class",
+      "rfc": "RFC 3925",
+      "description": "Vendor class data, tagged with an IANA enterprise number."
     },
     {
       "code": 125,
-      "name": "Vendor-Identifying Vendor-Specific Information"
+      "name": "Vendor-Identifying Vendor-Specific Information",
+      "rfc": "RFC 3925",
+      "description": "Vendor-specific data, tagged with an IANA enterprise number."
     },
     {
       "code": 128,
@@ -653,39 +881,55 @@
     {
       "code": 136,
       "name": "PANA Authentication Agent",
-      "format": "ipv4-list"
+      "format": "ipv4-list",
+      "rfc": "RFC 5192",
+      "description": "Address of a PANA (Protocol for Carrying Authentication for Network Access) agent."
     },
     {
       "code": 137,
       "name": "LoST Server",
-      "format": "string"
+      "format": "string",
+      "rfc": "RFC 5223",
+      "description": "Location-to-Service Translation (LoST) server, for location-based/emergency services."
     },
     {
       "code": 138,
       "name": "CAPWAP Access Controller Addresses",
-      "format": "ipv4-list"
+      "format": "ipv4-list",
+      "rfc": "RFC 5417",
+      "description": "CAPWAP access controller addresses for wireless termination points."
     },
     {
       "code": 139,
-      "name": "MoS IPv4 Address (802.21)"
+      "name": "MoS IPv4 Address (802.21)",
+      "rfc": "RFC 5678",
+      "description": "IEEE 802.21 Media Independent Handover Mobility Services server addresses."
     },
     {
       "code": 140,
-      "name": "MoS FQDN (802.21)"
+      "name": "MoS FQDN (802.21)",
+      "rfc": "RFC 5678",
+      "description": "IEEE 802.21 Media Independent Handover Mobility Services server domain names."
     },
     {
       "code": 141,
-      "name": "SIP UA Configuration Service Domains"
+      "name": "SIP UA Configuration Service Domains",
+      "rfc": "RFC 6011",
+      "description": "Domains for a SIP User Agent to query for its configuration."
     },
     {
       "code": 142,
       "name": "ANDSF IPv4 Address",
-      "format": "ipv4-list"
+      "format": "ipv4-list",
+      "rfc": "RFC 6153",
+      "description": "Access Network Discovery and Selection Function server addresses."
     },
     {
       "code": 143,
       "name": "SZTP Redirect",
-      "format": "string"
+      "format": "string",
+      "rfc": "RFC 8572",
+      "description": "Bootstrap server URIs for Secure Zero Touch Provisioning."
     },
     {
       "code": 144,
@@ -694,21 +938,29 @@
     {
       "code": 145,
       "name": "Forcerenew Nonce Capable",
-      "format": "bool"
+      "format": "bool",
+      "rfc": "RFC 6704",
+      "description": "Whether the client supports authenticated FORCERENEW messages."
     },
     {
       "code": 146,
-      "name": "RDNSS Selection"
+      "name": "RDNSS Selection",
+      "rfc": "RFC 6731",
+      "description": "Lets the server indicate which of several DNS resolvers to prefer, with a selection priority."
     },
     {
       "code": 147,
       "name": "DOTS Reference Identifier",
-      "format": "string"
+      "format": "string",
+      "rfc": "RFC 8973",
+      "description": "Identifies a DDoS Open Threat Signaling (DOTS) agent."
     },
     {
       "code": 148,
       "name": "DOTS Address",
-      "format": "ipv4-list"
+      "format": "ipv4-list",
+      "rfc": "RFC 8973",
+      "description": "Address of a DOTS agent."
     },
     {
       "code": 150,
@@ -754,12 +1006,16 @@
     },
     {
       "code": 159,
-      "name": "Port Parameters"
+      "name": "Port Parameters",
+      "rfc": "RFC 7618",
+      "description": "Port-restricted address parameters, e.g. for CGN/lightweight 4over6 deployments."
     },
     {
       "code": 161,
       "name": "MUD URL",
-      "format": "string"
+      "format": "string",
+      "rfc": "RFC 8520",
+      "description": "URL for this device's Manufacturer Usage Description file, describing its expected network behavior."
     },
     {
       "code": 162,
@@ -767,26 +1023,36 @@
     },
     {
       "code": 208,
-      "name": "PXELINUX Magic"
+      "name": "PXELINUX Magic",
+      "rfc": "RFC 5071",
+      "description": "Fixed magic number identifying that the remaining options are PXELINUX-specific."
     },
     {
       "code": 209,
       "name": "PXELINUX Configuration File",
-      "format": "string"
+      "format": "string",
+      "rfc": "RFC 5071",
+      "description": "Name of the PXELINUX configuration file to load."
     },
     {
       "code": 210,
       "name": "PXELINUX Path Prefix",
-      "format": "string"
+      "format": "string",
+      "rfc": "RFC 5071",
+      "description": "Path prefix PXELINUX should use when loading further files."
     },
     {
       "code": 211,
       "name": "PXELINUX Reboot Time",
-      "format": "duration-secs"
+      "format": "duration-secs",
+      "rfc": "RFC 5071",
+      "description": "How long PXELINUX should wait before rebooting after a failure."
     },
     {
       "code": 212,
-      "name": "OPTION_6RD"
+      "name": "OPTION_6RD",
+      "rfc": "RFC 5969",
+      "description": "6rd (IPv6 Rapid Deployment) configuration: border relay address, prefix, and IPv4 mask length."
     },
     {
       "code": 213,
@@ -804,7 +1070,9 @@
     {
       "code": 255,
       "name": "End",
-      "format": "empty"
+      "format": "empty",
+      "rfc": "RFC 2132",
+      "description": "Marks the end of the options field."
     }
   ]
 }

@@ -1,6 +1,6 @@
 use eframe::egui;
 
-use crate::net::dhcp::DhcpMessageWire;
+use crate::net::dhcp::{self, DhcpMessageWire};
 use crate::net::l2_manager::L2Status;
 
 use super::StatoriusApp;
@@ -68,9 +68,15 @@ impl StatoriusApp {
 /// client MAC, VLAN, the fixed BOOTP addresses that are actually set), plus
 /// its fully decoded options tucked into their own nested collapsing
 /// header so a transaction with several messages doesn't turn into a wall
-/// of option tables by default.
+/// of option tables by default. Wrapped in `ui.scope` (not `ui.group`) so
+/// each message still gets its own isolated child `Ui`/ID scope without a
+/// visible frame around it.
 fn render_dhcp_message(ui: &mut egui::Ui, xid: u32, index: usize, msg: &DhcpMessageWire) {
-    ui.group(|ui| {
+    // `ui.scope` rather than `ui.group`: it still gives this message its
+    // own child `Ui` (and ID scope, keeping its widgets from colliding
+    // with the next message's) but - unlike `group` - paints no visible
+    // frame/border around it.
+    ui.scope(|ui| {
         ui.horizontal(|ui| {
             ui.strong(&msg.message_type);
             ui.weak(format_timestamp(msg.captured_at_unix_ms));
@@ -103,7 +109,16 @@ fn render_dhcp_message(ui: &mut egui::Ui, xid: u32, index: usize, msg: &DhcpMess
 
                         for opt in &msg.options {
                             ui.label(opt.code.to_string());
-                            ui.label(&opt.name);
+
+                            ui.vertical(|ui| {
+                                ui.set_min_width(160.0);
+                                let name_resp = ui.label(&opt.name);
+                                if let Some(help) = dhcp::option_help(opt.code) {
+                                    name_resp.on_hover_text(help);
+                                }
+                                ui.weak(format!("({})", opt.data_type));
+                            });
+
                             // Each list entry (multiple IPs, a parameter
                             // request list, ...) already arrives as its own
                             // line from `dhcp.rs`; `wrap_text` additionally
@@ -117,6 +132,8 @@ fn render_dhcp_message(ui: &mut egui::Ui, xid: u32, index: usize, msg: &DhcpMess
                     });
             });
     });
+
+    ui.add_space(6.0);
 }
 
 /// `ciaddr`/`yiaddr`/`siaddr`/`giaddr` mean four different, easily-confused

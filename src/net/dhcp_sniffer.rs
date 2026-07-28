@@ -12,26 +12,38 @@
 //! Two independent capture handles on the same interface is the
 //! straightforward way to let both coexist without one starving the other.
 
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 
 use super::dhcp::{self, DhcpMessageWire};
 use super::l2_engine::open_capture;
 use super::l2_frame;
 
-/// Start the sniffer on its own blocking OS thread and return the channel
-/// it pushes decoded messages into. Call once, from the helper's startup,
-/// right alongside `l2_engine::spawn_engine`.
-pub fn spawn_dhcp_sniffer() -> mpsc::UnboundedReceiver<DhcpMessageWire> {
+/// Start the sniffer on its own blocking OS thread. Returns the channel it
+/// pushes decoded messages into, plus a one-shot that fires once the
+/// capture handle has either opened (filter installed or not) or
+/// definitively failed to - whichever happens, DHCP capture has "settled"
+/// at that point and it's safe to tell the GUI L2 mode is ready.
+///
+/// That second part matters: without it, `l2_helper` could report `Ready`
+/// to the GUI (flipping the checkbox to "Active") while this thread is
+/// still resolving the interface/opening pcap/installing a filter -
+/// letting the user trigger DHCP traffic that arrives before this loop is
+/// actually listening, silently missing the first packet(s) of the
+/// exchange. Call once, from the helper's startup, right alongside
+/// `l2_engine::spawn_engine`.
+pub fn spawn_dhcp_sniffer() -> (mpsc::UnboundedReceiver<DhcpMessageWire>, oneshot::Receiver<()>) {
     let (tx, rx) = mpsc::unbounded_channel();
-    tokio::task::spawn_blocking(move || sniffer_loop(tx));
-    rx
+    let (ready_tx, ready_rx) = oneshot::channel();
+    tokio::task::spawn_blocking(move || sniffer_loop(tx, ready_tx));
+    (rx, ready_rx)
 }
 
-fn sniffer_loop(tx: mpsc::UnboundedSender<DhcpMessageWire>) {
+fn sniffer_loop(tx: mpsc::UnboundedSender<DhcpMessageWire>, ready_tx: oneshot::Sender<()>) {
     let ctx = match l2_frame::resolve_default_interface() {
         Ok(c) => c,
         Err(e) => {
             eprintln!("dhcp-sniffer: no usable interface, not starting: {e}");
+            let _ = ready_tx.send(());
             return;
         }
     };
@@ -40,6 +52,7 @@ fn sniffer_loop(tx: mpsc::UnboundedSender<DhcpMessageWire>) {
         Ok(c) => c,
         Err(e) => {
             eprintln!("dhcp-sniffer: failed to open '{}': {e}", ctx.name);
+            let _ = ready_tx.send(());
             return;
         }
     };
@@ -55,6 +68,12 @@ fn sniffer_loop(tx: mpsc::UnboundedSender<DhcpMessageWire>) {
              continuing without one (slower, not incorrect)"
         );
     }
+
+    // The handle is open and the filter (if any) is installed - genuinely
+    // ready to capture from here on. The receiving end being gone (the
+    // helper already shut down) just means there's no one left to signal;
+    // not this thread's problem to handle.
+    let _ = ready_tx.send(());
 
     loop {
         match cap.next_packet() {
