@@ -20,6 +20,7 @@ use tokio::io::{BufReader, WriteHalf};
 use tokio::process::{Child, Command};
 use tokio::sync::{mpsc, oneshot};
 
+use super::dhcp_state::DhcpState;
 use super::l2::L2Readiness;
 use super::l2_ipc::{
     self, L2DuplicateOutcomeWire, L2Message, L2PingOutcomeWire, ServerStream,
@@ -191,6 +192,7 @@ pub async fn l2_manager_task(
     mut job_rx: mpsc::Receiver<L2JobRequest>,
     status: SharedL2Status,
     readiness: L2Readiness,
+    dhcp_state: DhcpState,
 ) {
     let mut session: Option<L2Session> = None;
     let mut helper_rx: Option<mpsc::Receiver<L2Message>> = None;
@@ -271,6 +273,13 @@ pub async fn l2_manager_task(
                         if let Some(PendingReply::Duplicate(tx)) = pending.remove(&id) {
                             let _ = tx.send(outcome);
                         }
+                    }
+                    Some(L2Message::DhcpEvent(msg)) => {
+                        // Unsolicited - no `id`, nothing in `pending` to
+                        // resolve. Recorded regardless of whether the DHCP
+                        // tab is even open right now, same as the pinger
+                        // list keeps running in the background.
+                        dhcp_state.record(msg);
                     }
                     Some(_) => {} // Ready/Failed/Shutdown aren't sent to us here
                     None => {

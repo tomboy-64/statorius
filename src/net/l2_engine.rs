@@ -166,7 +166,12 @@ fn drain_with_error(rx: &mut mpsc::Receiver<L2Job>, message: String) {
     }
 }
 
-fn open_capture(interface_name: &str) -> Result<pcap::Capture<pcap::Active>, pcap::Error> {
+/// `pub(crate)` (not just `fn`) so `dhcp_sniffer` can open its own,
+/// independent capture handle on the same interface with the exact same
+/// settings, rather than duplicating them - it never shares *this* handle,
+/// since that would mean competing with the job engine's one-at-a-time
+/// send/wait loop for reads.
+pub(crate) fn open_capture(interface_name: &str) -> Result<pcap::Capture<pcap::Active>, pcap::Error> {
     let device = pcap::Device::list()?
         .into_iter()
         .find(|d| d.name == interface_name)

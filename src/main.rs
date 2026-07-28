@@ -44,6 +44,12 @@ async fn main() -> eframe::Result<()> {
     let (tx_l2, rx_l2) = mpsc::channel::<net::l2_manager::L2Command>(8);
     let l2_status = net::l2_manager::SharedL2Status::new();
 
+    // Captured DHCP exchanges, for the "DHCP" tab. Same shared-state shape
+    // as everything else here: `l2_manager` writes into it as unsolicited
+    // `L2Message::DhcpEvent`s arrive from the helper's passive sniffer, the
+    // UI only ever reads a snapshot.
+    let dhcp_state = net::dhcp_state::DhcpState::new();
+
     // Separate channel for anything that actually wants to *use* L2 once
     // it's active (ping/duplicate-check jobs) - today that's only the L2
     // pinger list below, but it's the same channel a future TCP/UDP L2 scan
@@ -56,6 +62,7 @@ async fn main() -> eframe::Result<()> {
         rx_l2_jobs,
         l2_status.clone(),
         l2_readiness.clone(),
+        dhcp_state.clone(),
     ));
 
     // The L2 pinger list itself: same Start/Stop/Delete + shared-state
@@ -85,6 +92,7 @@ async fn main() -> eframe::Result<()> {
                 tx_l2_pinger,
                 l2_pinger_state,
                 tx_l2_jobs,
+                dhcp_state,
             )))
         }),
     )

@@ -10,6 +10,8 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 
+use super::dhcp::DhcpMessageWire;
+
 /// Messages exchanged over the connection once it's established.
 ///
 /// `PingRequest`/`DuplicateCheckRequest` carry an `id` so replies can be
@@ -53,6 +55,14 @@ pub enum L2Message {
         id: u64,
         outcome: L2DuplicateOutcomeWire,
     },
+
+    /// Helper -> GUI, unsolicited: one DHCP/BOOTP message the helper's
+    /// passive sniffer (`dhcp_sniffer`) just captured and decoded. Unlike
+    /// every other helper->GUI message above, there's no matching request
+    /// from the GUI side and no `id` - this is a pure event stream, pushed
+    /// continuously for as long as L2 mode is active, whether or not
+    /// anyone's looking at the DHCP tab right now.
+    DhcpEvent(DhcpMessageWire),
 }
 
 /// Wire-friendly mirror of `l2_engine::L2PingOutcome` (millis instead of

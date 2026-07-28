@@ -1,4 +1,7 @@
 mod backend;
+pub(crate) mod dhcp;
+mod dhcp_sniffer;
+pub(crate) mod dhcp_state;
 mod l2_engine;
 mod l2_frame;
 pub(crate) mod l2_helper;

@@ -1,8 +1,9 @@
 //! The elevated L2 helper process. When the binary is invoked with
 //! `--l2-helper <endpoint>`, `main()` runs this instead of the GUI: connect
 //! back to the GUI over the local IPC endpoint, confirm L2 capability now
-//! that we're (hopefully) elevated, start the job engine, and then relay
-//! Ping/DuplicateCheck requests to it until told to shut down.
+//! that we're (hopefully) elevated, start the job engine and the passive
+//! DHCP sniffer, and then relay Ping/DuplicateCheck requests (and stream
+//! captured DHCP messages) until told to shut down.
 //!
 //! This is deliberately the *only* code path in the whole binary that ever
 //! runs elevated - the GUI process, `state`, and everything the UI touches
@@ -13,6 +14,7 @@ use std::sync::Arc;
 use tokio::io::{AsyncWrite, BufReader};
 use tokio::sync::{oneshot, Mutex};
 
+use super::dhcp_sniffer;
 use super::l2::try_open_promiscuous_on_loopback;
 use super::l2_engine::{self, L2DuplicateOutcome, L2Job, L2PingOutcome};
 use super::l2_ipc::{self, L2DuplicateOutcomeWire, L2Message, L2PingOutcomeWire};
@@ -52,9 +54,22 @@ pub async fn run_l2_helper(endpoint: String) {
     }
 
     let job_tx = l2_engine::spawn_engine();
+    let mut dhcp_rx = dhcp_sniffer::spawn_dhcp_sniffer();
 
     loop {
-        match l2_ipc::recv_message(&mut reader).await {
+        tokio::select! {
+            // Purely passive - decoded messages get relayed to the GUI as
+            // soon as they arrive, with no id and no matching request; see
+            // `L2Message::DhcpEvent`. `None` here means the sniffer thread
+            // itself has exited (e.g. the interface disappeared) - nothing
+            // to shut down over that; the rest of the helper keeps working.
+            dhcp_msg = dhcp_rx.recv() => {
+                let Some(dhcp_msg) = dhcp_msg else { continue };
+                let _ = send(&writer, &L2Message::DhcpEvent(dhcp_msg)).await;
+            }
+
+            incoming = l2_ipc::recv_message(&mut reader) => {
+        match incoming {
             Ok(Some(L2Message::Shutdown)) | Ok(None) => break,
             Ok(Some(L2Message::PingRequest {
                         id,
@@ -144,6 +159,8 @@ pub async fn run_l2_helper(endpoint: String) {
             Err(e) => {
                 eprintln!("l2-helper: IPC error, exiting: {e}");
                 break;
+            }
+        }
             }
         }
     }

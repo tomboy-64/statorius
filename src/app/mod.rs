@@ -2,6 +2,7 @@ use std::time::{Duration, Instant};
 use eframe::egui;
 use tokio::sync::{mpsc, oneshot};
 
+use crate::net::dhcp_state::DhcpState;
 use crate::net::l2::L2Readiness;
 use crate::net::l2_ipc::L2DuplicateOutcomeWire;
 use crate::net::l2_manager::{L2Command, L2JobRequest, L2Status, SharedL2Status};
@@ -9,6 +10,7 @@ use crate::net::l2_pinger::{L2PingerCommand, L2PingerState};
 use crate::state::{SharedState, WorkerCommand};
 
 mod about_tab;
+mod dhcp_tab;
 mod interfaces_tab;
 mod l2_tab;
 mod ping_tab;
@@ -22,6 +24,7 @@ use l2_tab::{render_l2_checkbox, L2InputValidation};
 enum ActiveTab {
     Ping,
     L2Ping,
+    Dhcp,
     Interfaces,
     About,
 }
@@ -80,6 +83,16 @@ pub struct StatoriusApp {
     interfaces: Vec<default_net::Interface>,
     interface_update: Instant,
     interfaces_open: Vec::<(bool,bool,bool)>, // (outer is open, inner is open, ip is valid)
+
+    /// Captured DHCP exchanges for the "DHCP" tab - written by
+    /// `l2_manager` as they're captured, read via `.snapshot()` every
+    /// frame this tab is shown. See `net::dhcp_state`.
+    dhcp_state: DhcpState,
+    /// Per-transaction collapsing-header open/closed state, keyed by
+    /// `xid` - `egui::CollapsingHeader` needs this held outside itself to
+    /// stay controllable (open-by-default-until-toggled) the same way
+    /// `interfaces_open` does for the Interfaces tab.
+    dhcp_open: std::collections::HashMap<u32, bool>,
 }
 
 impl StatoriusApp {
@@ -93,6 +106,7 @@ impl StatoriusApp {
         l2_pinger_tx: mpsc::Sender<L2PingerCommand>,
         l2_pinger_state: L2PingerState,
         l2_job_tx: mpsc::Sender<L2JobRequest>,
+        dhcp_state: DhcpState,
     ) -> Self {
         Self {
             target_input: String::new(),
@@ -118,6 +132,8 @@ impl StatoriusApp {
             interfaces: default_net::get_interfaces(),
             interface_update: Instant::now(),
             interfaces_open: Vec::new(),
+            dhcp_state,
+            dhcp_open: std::collections::HashMap::new(),
         }
     }
 }
@@ -141,6 +157,7 @@ impl eframe::App for StatoriusApp {
             match self.active_tab {
                 ActiveTab::Ping => self.ui_ping_tab(ui),
                 ActiveTab::L2Ping => self.ui_l2_ping_tab(ui),
+                ActiveTab::Dhcp => self.ui_dhcp_tab(ui),
                 ActiveTab::Interfaces => (&mut*self).ui_interfaces_tab(ui),
                 ActiveTab::About => (&mut*self).ui_about_tab(ui),
             }
@@ -169,10 +186,12 @@ fn render_tab_bar(
     l2_tx: &mpsc::Sender<L2Command>,
 ) {
     let l2_tab_enabled = matches!(l2_status.get(), L2Status::Active { .. });
-    // If L2 mode gets deactivated (or fails) while the L2 Ping tab happens to
-    // be selected, fall back to the Ping tab rather than leaving the user
-    // stranded on a tab that's no longer clickable.
-    if !l2_tab_enabled && *active_tab == ActiveTab::L2Ping {
+    // If L2 mode gets deactivated (or fails) while the L2 Ping or DHCP tab
+    // happens to be selected, fall back to the Ping tab rather than leaving
+    // the user stranded on a tab that's no longer clickable. DHCP capture
+    // rides on the same raw-capture helper as L2 Ping, so it's gated
+    // identically.
+    if !l2_tab_enabled && (*active_tab == ActiveTab::L2Ping || *active_tab == ActiveTab::Dhcp) {
         *active_tab = ActiveTab::Ping;
     }
 
@@ -199,9 +218,22 @@ fn render_tab_bar(
                 ui.selectable_label(*active_tab == ActiveTab::L2Ping, "L2 Ping")
             })
             .inner
-            .on_hover_text(l2_tab_hover);
+            .on_hover_text(l2_tab_hover.clone());
         if l2_tab_resp.clicked() {
             *active_tab = ActiveTab::L2Ping;
+        }
+
+        // Same gating as "L2 Ping" above, and the same reason: reading DHCP
+        // traffic needs the raw capture the elevated helper provides, so
+        // there's nothing this tab could show until that's active.
+        let dhcp_tab_resp = ui
+            .add_enabled_ui(l2_tab_enabled, |ui| {
+                ui.selectable_label(*active_tab == ActiveTab::Dhcp, "DHCP")
+            })
+            .inner
+            .on_hover_text(l2_tab_hover.clone());
+        if dhcp_tab_resp.clicked() {
+            *active_tab = ActiveTab::Dhcp;
         }
 
         // Pure read-only enumeration, no privileges needed either way - so

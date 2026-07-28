@@ -30,6 +30,7 @@ use pnet_packet::icmpv6::{
 use pnet_packet::ip::IpNextHeaderProtocols;
 use pnet_packet::ipv4::{Ipv4Packet, MutableIpv4Packet};
 use pnet_packet::ipv6::{Ipv6Packet, MutableIpv6Packet};
+use pnet_packet::udp::UdpPacket;
 use pnet_packet::{ethernet::EtherType, ethernet::MutableEthernetPacket};
 
 pub const ETH_HEADER_LEN: usize = 14;
@@ -576,6 +577,44 @@ pub fn parse_ipv4(payload: &[u8]) -> Option<ParsedIpv4> {
 
 pub fn icmp_protocol() -> pnet_packet::ip::IpNextHeaderProtocol {
     IpNextHeaderProtocols::Icmp
+}
+
+// ---------------------------------------------------------------------
+// UDP - shared L4 parsing for anything riding over it. Today that's just
+// the DHCP sniffer (`net::dhcp_sniffer`), listening for the well-known
+// server/client ports; a future mDNS/SSDP/etc. listener would reuse this
+// same parse. There's no `build_udp_packet` here (nothing in this codebase
+// sends UDP yet) - only the receive side is needed.
+// ---------------------------------------------------------------------
+
+pub const UDP_HEADER_LEN: usize = 8;
+
+/// Parsed view of a UDP datagram: both ports, and the payload slice
+/// (trimmed to the header's own declared length where that's shorter than
+/// what was actually captured, e.g. trailing Ethernet padding on a short
+/// DHCP packet).
+pub struct ParsedUdp<'a> {
+    pub source_port: u16,
+    pub destination_port: u16,
+    pub payload: &'a [u8],
+}
+
+pub fn parse_udp(l4_payload: &[u8]) -> Option<ParsedUdp<'_>> {
+    let udp = UdpPacket::new(l4_payload)?;
+    let declared_len = udp.get_length() as usize;
+    let end = declared_len.max(UDP_HEADER_LEN).min(l4_payload.len());
+    if end < UDP_HEADER_LEN {
+        return None;
+    }
+    Some(ParsedUdp {
+        source_port: udp.get_source(),
+        destination_port: udp.get_destination(),
+        payload: &l4_payload[UDP_HEADER_LEN..end],
+    })
+}
+
+pub fn udp_protocol() -> pnet_packet::ip::IpNextHeaderProtocol {
+    IpNextHeaderProtocols::Udp
 }
 
 // ---------------------------------------------------------------------

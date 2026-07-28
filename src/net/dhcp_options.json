@@ -1,0 +1,810 @@
+{
+  "_comment": "DHCP/BOOTP option and message-type names, sourced from the IANA 'BOOTP Vendor Extensions and DHCP Options' and 'DHCP Message Type 53 Values' registries (https://www.iana.org/assignments/bootp-dhcp-parameters/). Every option here has a correct `name`; only some also have a `format` hint telling dhcp.rs how to render its value (ipv4 / ipv4-list / string / u8 / u16 / u32 / i32 / bool / duration-secs / message-type / option-code-list / empty). Options without a `format` (or with an unrecognized one) fall back to a plain hex dump - safe, but not pretty. Add a `format` here to improve decoding for a given option; no Rust changes needed.",
+  "message_types": [
+    {
+      "code": 1,
+      "name": "DHCPDISCOVER"
+    },
+    {
+      "code": 2,
+      "name": "DHCPOFFER"
+    },
+    {
+      "code": 3,
+      "name": "DHCPREQUEST"
+    },
+    {
+      "code": 4,
+      "name": "DHCPDECLINE"
+    },
+    {
+      "code": 5,
+      "name": "DHCPACK"
+    },
+    {
+      "code": 6,
+      "name": "DHCPNAK"
+    },
+    {
+      "code": 7,
+      "name": "DHCPRELEASE"
+    },
+    {
+      "code": 8,
+      "name": "DHCPINFORM"
+    },
+    {
+      "code": 9,
+      "name": "DHCPFORCERENEW"
+    },
+    {
+      "code": 10,
+      "name": "DHCPLEASEQUERY"
+    },
+    {
+      "code": 11,
+      "name": "DHCPLEASEUNASSIGNED"
+    },
+    {
+      "code": 12,
+      "name": "DHCPLEASEUNKNOWN"
+    },
+    {
+      "code": 13,
+      "name": "DHCPLEASEACTIVE"
+    },
+    {
+      "code": 14,
+      "name": "DHCPBULKLEASEQUERY"
+    },
+    {
+      "code": 15,
+      "name": "DHCPLEASEQUERYDONE"
+    },
+    {
+      "code": 16,
+      "name": "DHCPACTIVELEASEQUERY"
+    },
+    {
+      "code": 17,
+      "name": "DHCPLEASEQUERYSTATUS"
+    },
+    {
+      "code": 18,
+      "name": "DHCPTLS"
+    }
+  ],
+  "options": [
+    {
+      "code": 0,
+      "name": "Pad",
+      "format": "empty"
+    },
+    {
+      "code": 1,
+      "name": "Subnet Mask",
+      "format": "ipv4"
+    },
+    {
+      "code": 2,
+      "name": "Time Offset",
+      "format": "i32"
+    },
+    {
+      "code": 3,
+      "name": "Router",
+      "format": "ipv4-list"
+    },
+    {
+      "code": 4,
+      "name": "Time Server",
+      "format": "ipv4-list"
+    },
+    {
+      "code": 5,
+      "name": "Name Server",
+      "format": "ipv4-list"
+    },
+    {
+      "code": 6,
+      "name": "Domain Server",
+      "format": "ipv4-list"
+    },
+    {
+      "code": 7,
+      "name": "Log Server",
+      "format": "ipv4-list"
+    },
+    {
+      "code": 8,
+      "name": "Quotes Server",
+      "format": "ipv4-list"
+    },
+    {
+      "code": 9,
+      "name": "LPR Server",
+      "format": "ipv4-list"
+    },
+    {
+      "code": 10,
+      "name": "Impress Server",
+      "format": "ipv4-list"
+    },
+    {
+      "code": 11,
+      "name": "RLP Server",
+      "format": "ipv4-list"
+    },
+    {
+      "code": 12,
+      "name": "Hostname",
+      "format": "string"
+    },
+    {
+      "code": 13,
+      "name": "Boot File Size",
+      "format": "u16"
+    },
+    {
+      "code": 14,
+      "name": "Merit Dump File",
+      "format": "string"
+    },
+    {
+      "code": 15,
+      "name": "Domain Name",
+      "format": "string"
+    },
+    {
+      "code": 16,
+      "name": "Swap Server",
+      "format": "ipv4"
+    },
+    {
+      "code": 17,
+      "name": "Root Path",
+      "format": "string"
+    },
+    {
+      "code": 18,
+      "name": "Extension File",
+      "format": "string"
+    },
+    {
+      "code": 19,
+      "name": "IP Forwarding",
+      "format": "bool"
+    },
+    {
+      "code": 20,
+      "name": "Non-Local Source Routing",
+      "format": "bool"
+    },
+    {
+      "code": 21,
+      "name": "Policy Filter"
+    },
+    {
+      "code": 22,
+      "name": "Max Datagram Reassembly",
+      "format": "u16"
+    },
+    {
+      "code": 23,
+      "name": "Default IP TTL",
+      "format": "u8"
+    },
+    {
+      "code": 24,
+      "name": "Path MTU Aging Timeout",
+      "format": "duration-secs"
+    },
+    {
+      "code": 25,
+      "name": "Path MTU Plateau Table"
+    },
+    {
+      "code": 26,
+      "name": "Interface MTU",
+      "format": "u16"
+    },
+    {
+      "code": 27,
+      "name": "All Subnets Are Local",
+      "format": "bool"
+    },
+    {
+      "code": 28,
+      "name": "Broadcast Address",
+      "format": "ipv4"
+    },
+    {
+      "code": 29,
+      "name": "Perform Mask Discovery",
+      "format": "bool"
+    },
+    {
+      "code": 30,
+      "name": "Mask Supplier",
+      "format": "bool"
+    },
+    {
+      "code": 31,
+      "name": "Perform Router Discovery",
+      "format": "bool"
+    },
+    {
+      "code": 32,
+      "name": "Router Solicitation Address",
+      "format": "ipv4"
+    },
+    {
+      "code": 33,
+      "name": "Static Route"
+    },
+    {
+      "code": 34,
+      "name": "Trailer Encapsulation",
+      "format": "bool"
+    },
+    {
+      "code": 35,
+      "name": "ARP Cache Timeout",
+      "format": "duration-secs"
+    },
+    {
+      "code": 36,
+      "name": "Ethernet Encapsulation",
+      "format": "bool"
+    },
+    {
+      "code": 37,
+      "name": "Default TCP TTL",
+      "format": "u8"
+    },
+    {
+      "code": 38,
+      "name": "TCP Keepalive Interval",
+      "format": "duration-secs"
+    },
+    {
+      "code": 39,
+      "name": "TCP Keepalive Garbage",
+      "format": "bool"
+    },
+    {
+      "code": 40,
+      "name": "NIS Domain",
+      "format": "string"
+    },
+    {
+      "code": 41,
+      "name": "NIS Servers",
+      "format": "ipv4-list"
+    },
+    {
+      "code": 42,
+      "name": "NTP Servers",
+      "format": "ipv4-list"
+    },
+    {
+      "code": 43,
+      "name": "Vendor Specific Information"
+    },
+    {
+      "code": 44,
+      "name": "NetBIOS Name Server",
+      "format": "ipv4-list"
+    },
+    {
+      "code": 45,
+      "name": "NetBIOS Datagram Distribution Server",
+      "format": "ipv4-list"
+    },
+    {
+      "code": 46,
+      "name": "NetBIOS Node Type",
+      "format": "u8"
+    },
+    {
+      "code": 47,
+      "name": "NetBIOS Scope",
+      "format": "string"
+    },
+    {
+      "code": 48,
+      "name": "X Window Font Server",
+      "format": "ipv4-list"
+    },
+    {
+      "code": 49,
+      "name": "X Window Display Manager",
+      "format": "ipv4-list"
+    },
+    {
+      "code": 50,
+      "name": "Requested IP Address",
+      "format": "ipv4"
+    },
+    {
+      "code": 51,
+      "name": "IP Address Lease Time",
+      "format": "duration-secs"
+    },
+    {
+      "code": 52,
+      "name": "Option Overload",
+      "format": "u8"
+    },
+    {
+      "code": 53,
+      "name": "DHCP Message Type",
+      "format": "message-type"
+    },
+    {
+      "code": 54,
+      "name": "DHCP Server Identifier",
+      "format": "ipv4"
+    },
+    {
+      "code": 55,
+      "name": "Parameter Request List",
+      "format": "option-code-list"
+    },
+    {
+      "code": 56,
+      "name": "DHCP Message",
+      "format": "string"
+    },
+    {
+      "code": 57,
+      "name": "Maximum DHCP Message Size",
+      "format": "u16"
+    },
+    {
+      "code": 58,
+      "name": "Renewal (T1) Time Value",
+      "format": "duration-secs"
+    },
+    {
+      "code": 59,
+      "name": "Rebinding (T2) Time Value",
+      "format": "duration-secs"
+    },
+    {
+      "code": 60,
+      "name": "Vendor Class Identifier",
+      "format": "string"
+    },
+    {
+      "code": 61,
+      "name": "Client Identifier"
+    },
+    {
+      "code": 62,
+      "name": "NetWare/IP Domain",
+      "format": "string"
+    },
+    {
+      "code": 63,
+      "name": "NetWare/IP Option"
+    },
+    {
+      "code": 64,
+      "name": "NIS+ Domain",
+      "format": "string"
+    },
+    {
+      "code": 65,
+      "name": "NIS+ Servers",
+      "format": "ipv4-list"
+    },
+    {
+      "code": 66,
+      "name": "TFTP Server Name",
+      "format": "string"
+    },
+    {
+      "code": 67,
+      "name": "Bootfile Name",
+      "format": "string"
+    },
+    {
+      "code": 68,
+      "name": "Home Agent Addresses",
+      "format": "ipv4-list"
+    },
+    {
+      "code": 69,
+      "name": "SMTP Server",
+      "format": "ipv4-list"
+    },
+    {
+      "code": 70,
+      "name": "POP3 Server",
+      "format": "ipv4-list"
+    },
+    {
+      "code": 71,
+      "name": "NNTP Server",
+      "format": "ipv4-list"
+    },
+    {
+      "code": 72,
+      "name": "WWW Server",
+      "format": "ipv4-list"
+    },
+    {
+      "code": 73,
+      "name": "Finger Server",
+      "format": "ipv4-list"
+    },
+    {
+      "code": 74,
+      "name": "IRC Server",
+      "format": "ipv4-list"
+    },
+    {
+      "code": 75,
+      "name": "StreetTalk Server",
+      "format": "ipv4-list"
+    },
+    {
+      "code": 76,
+      "name": "StreetTalk Directory Assistance Server",
+      "format": "ipv4-list"
+    },
+    {
+      "code": 77,
+      "name": "User Class"
+    },
+    {
+      "code": 78,
+      "name": "Directory Agent"
+    },
+    {
+      "code": 79,
+      "name": "Service Scope"
+    },
+    {
+      "code": 80,
+      "name": "Rapid Commit",
+      "format": "empty"
+    },
+    {
+      "code": 81,
+      "name": "Client FQDN"
+    },
+    {
+      "code": 82,
+      "name": "Relay Agent Information"
+    },
+    {
+      "code": 83,
+      "name": "iSNS"
+    },
+    {
+      "code": 85,
+      "name": "NDS Servers",
+      "format": "ipv4-list"
+    },
+    {
+      "code": 86,
+      "name": "NDS Tree Name",
+      "format": "string"
+    },
+    {
+      "code": 87,
+      "name": "NDS Context",
+      "format": "string"
+    },
+    {
+      "code": 88,
+      "name": "BCMCS Controller Domain Name List"
+    },
+    {
+      "code": 89,
+      "name": "BCMCS Controller IPv4 Address",
+      "format": "ipv4-list"
+    },
+    {
+      "code": 90,
+      "name": "Authentication"
+    },
+    {
+      "code": 91,
+      "name": "Client Last Transaction Time",
+      "format": "u32"
+    },
+    {
+      "code": 92,
+      "name": "Associated IP",
+      "format": "ipv4-list"
+    },
+    {
+      "code": 93,
+      "name": "Client System Architecture"
+    },
+    {
+      "code": 94,
+      "name": "Client Network Device Interface"
+    },
+    {
+      "code": 97,
+      "name": "UUID/GUID-based Client Identifier"
+    },
+    {
+      "code": 98,
+      "name": "User Authentication (Open Group)",
+      "format": "string"
+    },
+    {
+      "code": 99,
+      "name": "GeoConf Civic"
+    },
+    {
+      "code": 100,
+      "name": "PCode (POSIX TZ String)",
+      "format": "string"
+    },
+    {
+      "code": 101,
+      "name": "TCode (TZ Database Reference)",
+      "format": "string"
+    },
+    {
+      "code": 108,
+      "name": "IPv6-Only Preferred",
+      "format": "duration-secs"
+    },
+    {
+      "code": 109,
+      "name": "DHCPv4 over DHCPv6 Softwire Source Address"
+    },
+    {
+      "code": 112,
+      "name": "NetInfo Parent Server Address",
+      "format": "ipv4-list"
+    },
+    {
+      "code": 113,
+      "name": "NetInfo Parent Server Tag",
+      "format": "string"
+    },
+    {
+      "code": 114,
+      "name": "DHCP Captive-Portal",
+      "format": "string"
+    },
+    {
+      "code": 116,
+      "name": "Auto-Configure",
+      "format": "bool"
+    },
+    {
+      "code": 117,
+      "name": "Name Service Search"
+    },
+    {
+      "code": 118,
+      "name": "Subnet Selection Option",
+      "format": "ipv4"
+    },
+    {
+      "code": 119,
+      "name": "Domain Search"
+    },
+    {
+      "code": 120,
+      "name": "SIP Servers"
+    },
+    {
+      "code": 121,
+      "name": "Classless Static Route"
+    },
+    {
+      "code": 122,
+      "name": "CableLabs Client Configuration"
+    },
+    {
+      "code": 123,
+      "name": "GeoConf"
+    },
+    {
+      "code": 124,
+      "name": "Vendor-Identifying Vendor Class"
+    },
+    {
+      "code": 125,
+      "name": "Vendor-Identifying Vendor-Specific Information"
+    },
+    {
+      "code": 128,
+      "name": "PXE (vendor-specific 128)"
+    },
+    {
+      "code": 129,
+      "name": "PXE (vendor-specific 129)"
+    },
+    {
+      "code": 130,
+      "name": "PXE (vendor-specific 130)"
+    },
+    {
+      "code": 131,
+      "name": "PXE (vendor-specific 131)"
+    },
+    {
+      "code": 132,
+      "name": "PXE (vendor-specific 132)"
+    },
+    {
+      "code": 133,
+      "name": "PXE (vendor-specific 133)"
+    },
+    {
+      "code": 134,
+      "name": "PXE (vendor-specific 134)"
+    },
+    {
+      "code": 135,
+      "name": "PXE (vendor-specific 135)"
+    },
+    {
+      "code": 136,
+      "name": "PANA Authentication Agent",
+      "format": "ipv4-list"
+    },
+    {
+      "code": 137,
+      "name": "LoST Server",
+      "format": "string"
+    },
+    {
+      "code": 138,
+      "name": "CAPWAP Access Controller Addresses",
+      "format": "ipv4-list"
+    },
+    {
+      "code": 139,
+      "name": "MoS IPv4 Address (802.21)"
+    },
+    {
+      "code": 140,
+      "name": "MoS FQDN (802.21)"
+    },
+    {
+      "code": 141,
+      "name": "SIP UA Configuration Service Domains"
+    },
+    {
+      "code": 142,
+      "name": "ANDSF IPv4 Address",
+      "format": "ipv4-list"
+    },
+    {
+      "code": 143,
+      "name": "SZTP Redirect",
+      "format": "string"
+    },
+    {
+      "code": 144,
+      "name": "GeoLoc"
+    },
+    {
+      "code": 145,
+      "name": "Forcerenew Nonce Capable",
+      "format": "bool"
+    },
+    {
+      "code": 146,
+      "name": "RDNSS Selection"
+    },
+    {
+      "code": 147,
+      "name": "DOTS Reference Identifier",
+      "format": "string"
+    },
+    {
+      "code": 148,
+      "name": "DOTS Address",
+      "format": "ipv4-list"
+    },
+    {
+      "code": 150,
+      "name": "TFTP Server Address / Etherboot / GRUB Config Path"
+    },
+    {
+      "code": 151,
+      "name": "Status Code"
+    },
+    {
+      "code": 152,
+      "name": "Base Time",
+      "format": "u32"
+    },
+    {
+      "code": 153,
+      "name": "Start Time of State",
+      "format": "duration-secs"
+    },
+    {
+      "code": 154,
+      "name": "Query Start Time",
+      "format": "u32"
+    },
+    {
+      "code": 155,
+      "name": "Query End Time",
+      "format": "u32"
+    },
+    {
+      "code": 156,
+      "name": "DHCP State",
+      "format": "u8"
+    },
+    {
+      "code": 157,
+      "name": "Data Source",
+      "format": "u8"
+    },
+    {
+      "code": 158,
+      "name": "PCP Server"
+    },
+    {
+      "code": 159,
+      "name": "Port Parameters"
+    },
+    {
+      "code": 161,
+      "name": "MUD URL",
+      "format": "string"
+    },
+    {
+      "code": 162,
+      "name": "Encrypted DNS Server"
+    },
+    {
+      "code": 208,
+      "name": "PXELINUX Magic"
+    },
+    {
+      "code": 209,
+      "name": "PXELINUX Configuration File",
+      "format": "string"
+    },
+    {
+      "code": 210,
+      "name": "PXELINUX Path Prefix",
+      "format": "string"
+    },
+    {
+      "code": 211,
+      "name": "PXELINUX Reboot Time",
+      "format": "duration-secs"
+    },
+    {
+      "code": 212,
+      "name": "OPTION_6RD"
+    },
+    {
+      "code": 213,
+      "name": "Access Network Domain Name",
+      "format": "string"
+    },
+    {
+      "code": 220,
+      "name": "Subnet Allocation Option"
+    },
+    {
+      "code": 221,
+      "name": "Virtual Subnet Selection"
+    },
+    {
+      "code": 255,
+      "name": "End",
+      "format": "empty"
+    }
+  ]
+}
