@@ -15,7 +15,7 @@ use tokio::io::{AsyncWrite, BufReader};
 use tokio::sync::{oneshot, Mutex};
 
 use super::dhcp_sniffer;
-use super::l2::try_open_promiscuous_on_loopback;
+use super::l2::try_open_promiscuous_probe;
 use super::l2_engine::{self, L2DuplicateOutcome, L2Job, L2PingOutcome};
 use super::l2_ipc::{self, L2DuplicateOutcomeWire, L2Message, L2PingOutcomeWire};
 
@@ -40,7 +40,7 @@ pub async fn run_l2_helper(endpoint: String) {
     // we're elevated. If it still doesn't, something's genuinely wrong (not
     // just "needs elevation"), and we report that honestly rather than
     // pretending to be ready.
-    let outcome = match try_open_promiscuous_on_loopback() {
+    let outcome = match try_open_promiscuous_probe() {
         Ok(detail) => L2Message::Ready { detail },
         Err(reason) => L2Message::Failed { reason },
     };
