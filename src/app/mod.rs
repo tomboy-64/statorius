@@ -3,6 +3,7 @@ use eframe::egui;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::net::dhcp_state::DhcpState;
+use crate::net::dns::{DnsCommand, SharedDnsServers};
 use crate::net::l2::L2Readiness;
 use crate::net::l2_ipc::L2DuplicateOutcomeWire;
 use crate::net::l2_manager::{L2Command, L2JobRequest, L2Status, SharedL2Status};
@@ -11,6 +12,7 @@ use crate::state::{SharedState, WorkerCommand};
 
 mod about_tab;
 mod dhcp_tab;
+mod dns_tab;
 mod interfaces_tab;
 mod l2_tab;
 mod ping_tab;
@@ -26,6 +28,7 @@ enum ActiveTab {
     L2Ping,
     Dhcp,
     Interfaces,
+    Dns,
     About,
 }
 
@@ -93,6 +96,53 @@ pub struct StatoriusApp {
     /// stay controllable (open-by-default-until-toggled) the same way
     /// `interfaces_open` does for the Interfaces tab.
     dhcp_open: std::collections::HashMap<u32, bool>,
+
+    /// The OS's currently-configured DNS servers, refreshed in the
+    /// background every 10s - read fresh every frame for the "DNS
+    /// Servers" tab, same as `l2_status`/`dhcp_state`. See `net::dns`.
+    dns_shared: SharedDnsServers,
+    /// Sends one-off `DnsCommand::Resolve` jobs to the background
+    /// `dns_worker` task - used by the Ping tab when Enter is pressed on
+    /// something that isn't already a literal IP address.
+    dns_tx: mpsc::Sender<DnsCommand>,
+    /// Which of `dns_shared`'s servers are checked in the "DNS Servers"
+    /// tab, keyed by address so a selection survives the list being
+    /// refreshed out from under it. A server not yet in this map (just
+    /// discovered) defaults to checked/selected.
+    dns_selected: std::collections::HashMap<std::net::IpAddr, bool>,
+    /// The hostname lookup currently in flight for the Ping tab, if any -
+    /// `Some` disables re-submitting until it resolves one way or the
+    /// other.
+    dns_resolve_rx: Option<oneshot::Receiver<Result<Vec<std::net::IpAddr>, String>>>,
+    /// The exact text that was submitted for the in-flight lookup above -
+    /// used to attribute the reply (success or failure) back to it.
+    dns_resolve_target: String,
+    /// `Some(text)` when `text` (as typed into `target_input` at the time)
+    /// failed DNS resolution - the Ping tab renders `target_input` in red
+    /// for exactly as long as it still equals this, and clears back to
+    /// normal the moment the user types anything else.
+    dns_failed_for: Option<String>,
+    /// Servers added by hand on the DNS Servers tab (the "+" field), on top
+    /// of whatever `dns_shared` reports the OS has configured. Never
+    /// touched by the 10s background refresh - only removed by the user's
+    /// own "x" button, or implicitly by loading a `.dns` file that doesn't
+    /// mention them.
+    dns_manual_servers: Vec<std::net::IpAddr>,
+    /// Live text of the DNS Servers tab's "add a server" field.
+    dns_add_input: String,
+    /// Set when `dns_add_input` didn't parse as an IP address; rendered in
+    /// red under the add field, cleared on the next successful add.
+    dns_add_error: Option<String>,
+    /// `Some(filename-in-progress)` while the "save as" field is open;
+    /// `None` otherwise. Only one of this and `dns_load_input` is open at a
+    /// time.
+    dns_save_input: Option<String>,
+    /// `Some(filename-in-progress)` while the "open" field is open; `None`
+    /// otherwise.
+    dns_load_input: Option<String>,
+    /// Result of the last save/load attempt, shown under the 💾/📁 row
+    /// until the next one replaces it - `(is_error, message)`.
+    dns_io_message: Option<(bool, String)>,
 }
 
 impl StatoriusApp {
@@ -107,6 +157,8 @@ impl StatoriusApp {
         l2_pinger_state: L2PingerState,
         l2_job_tx: mpsc::Sender<L2JobRequest>,
         dhcp_state: DhcpState,
+        dns_shared: SharedDnsServers,
+        dns_tx: mpsc::Sender<DnsCommand>,
     ) -> Self {
         Self {
             target_input: String::new(),
@@ -134,6 +186,18 @@ impl StatoriusApp {
             interfaces_open: Vec::new(),
             dhcp_state,
             dhcp_open: std::collections::HashMap::new(),
+            dns_shared,
+            dns_tx,
+            dns_selected: std::collections::HashMap::new(),
+            dns_resolve_rx: None,
+            dns_resolve_target: String::new(),
+            dns_failed_for: None,
+            dns_manual_servers: Vec::new(),
+            dns_add_input: String::new(),
+            dns_add_error: None,
+            dns_save_input: None,
+            dns_load_input: None,
+            dns_io_message: None,
         }
     }
 }
@@ -159,6 +223,7 @@ impl eframe::App for StatoriusApp {
                 ActiveTab::L2Ping => self.ui_l2_ping_tab(ui),
                 ActiveTab::Dhcp => self.ui_dhcp_tab(ui),
                 ActiveTab::Interfaces => (&mut*self).ui_interfaces_tab(ui),
+                ActiveTab::Dns => self.ui_dns_tab(ui),
                 ActiveTab::About => (&mut*self).ui_about_tab(ui),
             }
         });
@@ -243,6 +308,15 @@ fn render_tab_bar(
             .clicked()
         {
             *active_tab = ActiveTab::Interfaces;
+        }
+
+        // Also just a local read (resolv.conf / the registry) - no
+        // privileges needed, never disabled.
+        if ui
+            .selectable_label(*active_tab == ActiveTab::Dns, "DNS Servers")
+            .clicked()
+        {
+            *active_tab = ActiveTab::Dns;
         }
 
         if ui

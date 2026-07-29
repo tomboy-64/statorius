@@ -85,6 +85,16 @@ async fn main() -> eframe::Result<()> {
         tx_l2_jobs.clone(),
     ));
 
+    // System DNS servers, for the "DNS Servers" tab, plus on-demand
+    // hostname resolution against whichever of them the user checks - see
+    // `net::dns`. `dns_shared` is read fresh every frame (same shared-state
+    // shape as `l2_status`/`dhcp_state`); `tx_dns` carries one-off resolve
+    // requests the Ping tab sends when Enter is pressed on something that
+    // isn't already a literal IP address.
+    let (tx_dns, rx_dns) = mpsc::channel::<net::dns::DnsCommand>(16);
+    let dns_shared = net::dns::SharedDnsServers::new();
+    tokio::spawn(net::dns::dns_worker(rx_dns, dns_shared.clone()));
+
     let options = eframe::NativeOptions::default();
     eframe::run_native(
         "Statorius",
@@ -100,6 +110,8 @@ async fn main() -> eframe::Result<()> {
                 l2_pinger_state,
                 tx_l2_jobs,
                 dhcp_state,
+                dns_shared,
+                tx_dns,
             )))
         }),
     )
