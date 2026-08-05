@@ -5,3 +5,6 @@
 *.lib
 *.dll
 /arch/src/
+/arch/statorius*.zst
+/arch/v*.tar.gz
+/arch/pkg/
