@@ -54,7 +54,7 @@ jobs:
         if: runner.os == 'Windows'
         run: |
           cargo install cargo-wix
-          cargo wix
+          cargo wix --nocapture
 
       # Upload the finished pure .exe binary as an artifact[cite: 2]
       - name: Upload Binary Artifact
