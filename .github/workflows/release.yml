@@ -11,7 +11,7 @@ jobs:
     name: Build on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
 
-    # Run two jobs in parallel: one on Linux, one on Windows
+    # Run two jobs in parallel: one on Linux, one on Windows[cite: 2]
     strategy:
       matrix:
         include:
@@ -29,32 +29,51 @@ jobs:
       - name: Install Rust Toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      # LINUX ONLY: Install the native C-headers for pcap
+      # LINUX ONLY: Install the native C-headers for pcap[cite: 2]
       - name: Install libpcap (Linux)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libpcap-dev
 
-      # WINDOWS ONLY: Download Npcap SDK and set environment variable
+      # WINDOWS ONLY: Download Npcap SDK and set environment variable[cite: 2]
       - name: Setup Npcap SDK (Windows)
         if: runner.os == 'Windows'
         run: |
           Invoke-WebRequest -Uri "https://npcap.com/dist/npcap-sdk-1.16.zip" -OutFile "npcap-sdk.zip"
           Expand-Archive -Path "npcap-sdk.zip" -DestinationPath "npcap-sdk"
           
-          # Add the extracted library path to the MSVC LIB environment variable so link.exe can find wpcap.lib
+          # Add the extracted library path to the MSVC LIB environment variable so link.exe can find wpcap.lib[cite: 2]
           echo "LIB=${{ github.workspace }}\npcap-sdk\Lib\x64;$env:LIB" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: Build Release Binary
         run: cargo build --release
 
-      # Upload the finished binary as an artifact
-      - name: Upload Artifact
+      # -----------------------------------------------------
+      # NEW: Install cargo-wix and build the MSI on Windows
+      # -----------------------------------------------------
+      - name: Build MSI Installer (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          cargo install cargo-wix
+          cargo wix
+
+      # Upload the finished pure .exe binary as an artifact[cite: 2]
+      - name: Upload Binary Artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
           path: target/release/${{ matrix.binary_name }}
 
-  # Once both builds finish, create a GitHub Release and attach the binaries
+      # -----------------------------------------------------
+      # NEW: Upload the MSI artifact
+      # -----------------------------------------------------
+      - name: Upload MSI Artifact (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: statorius-windows-installer
+          path: target/wix/*.msi
+
+  # Once both builds finish, create a GitHub Release and attach the binaries[cite: 2]
   create_release:
     name: Create GitHub Release
     needs: build
@@ -70,7 +89,9 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
+          # NEW: Added the MSI folder to the files list
           files: |
             artifacts/statorius-linux-amd64/*
             artifacts/statorius-windows-amd64.exe/*
+            artifacts/statorius-windows-installer/*
           generate_release_notes: true

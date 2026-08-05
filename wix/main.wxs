@@ -1,0 +1,19 @@
+<!-- Define the Start Menu folder -->
+<Directory Id="ProgramMenuFolder">
+    <Directory Id="ApplicationProgramsFolder" Name="statorius"/>
+</Directory>
+
+<!-- Define the shortcut component -->
+<DirectoryRef Id="ApplicationProgramsFolder">
+    <Component Id="ApplicationShortcut" Guid="PUT-A-RANDOM-GUID-HERE">
+        <Shortcut Id="ApplicationStartMenuShortcut"
+                  Name="statorius"
+                  Description="A brief description of statorius"
+                  Target="[APPLICATIONFOLDER]bin\statorius.exe"
+                  WorkingDirectory="APPLICATIONFOLDER"/>
+
+        <!-- This ensures the shortcut is removed upon uninstall -->
+        <RemoveFolder Id="CleanUpShortCut" Directory="ApplicationProgramsFolder" On="uninstall"/>
+        <RegistryValue Root="HKCU" Key="Software\statorius" Name="installed" Type="integer" Value="1" KeyPath="yes"/>
+    </Component>
+</DirectoryRef>
