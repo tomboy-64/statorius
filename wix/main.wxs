@@ -5,7 +5,7 @@
 
 <!-- Define the shortcut component -->
 <DirectoryRef Id="ApplicationProgramsFolder">
-    <Component Id="ApplicationShortcut" Guid="PUT-A-RANDOM-GUID-HERE">
+    <Component Id="ApplicationShortcut" Guid="93c95ab2-4c3a-4c13-ad63-acf5c5ef55da">
         <Shortcut Id="ApplicationStartMenuShortcut"
                   Name="statorius"
                   Description="A brief description of statorius"
