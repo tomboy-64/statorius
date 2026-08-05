@@ -4,3 +4,4 @@
 /npcap-sdk-1.16
 *.lib
 *.dll
+/arch/src/

@@ -1,0 +1,44 @@
+# Maintainer: Your Name <your.email@example.com>
+pkgname=statorius
+pkgver=0.4.5
+pkgrel=1
+pkgdesc="A networking toolkit"
+arch=('x86_64')
+url="https://github.com/tomboy-64/statorius" # Update with the real URL
+license=('AGPL3') # Update if the Rust project uses MIT, Apache, etc.
+
+# Rust binaries usually depend on these standard C libraries
+depends=('glibc' 'gcc-libs')
+# These are only needed during the makepkg process
+makedepends=('rust' 'cargo')
+
+# We reference your tar file verbatim, plus the .desktop file you'll create
+source=("https://github.com/tomboy-64/${pkgname}/archive/refs/tags/v${pkgver}.tar.gz"
+        "${pkgname}.desktop")
+
+sha256sums=('SKIP'
+            'SKIP')
+
+# Optional but recommended: clean up the Rust environment slightly
+export RUSTUP_TOOLCHAIN=stable
+
+build() {
+    cd "$pkgname-$pkgver"
+
+    # Compile the Rust project for release.
+    # --locked ensures it strictly uses the Cargo.lock file included in the tarball.
+    cargo build --release --locked
+}
+
+package() {
+    cd "$pkgname-$pkgver"
+
+    # 1. Install the compiled Rust binary from Cargo's target folder
+    install -Dm755 "target/release/$pkgname" "$pkgdir/usr/bin/$pkgname"
+
+    # 2. Install the .desktop file (which you created in the same folder as the PKGBUILD)
+    install -Dm644 "$srcdir/$pkgname.desktop" "$pkgdir/usr/share/applications/$pkgname.desktop"
+
+    # 3. (Optional) If the tarball contains an icon, install it!
+    # install -Dm644 "assets/icon.png" "$pkgdir/usr/share/pixmaps/$pkgname.png"
+}
