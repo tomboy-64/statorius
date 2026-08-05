@@ -326,7 +326,10 @@ pub(super) fn render_l2_checkbox(
         ui.painter().circle_filled(dot_rect.center(), 5.0, dot_color);
 
         let checkbox = egui::Checkbox::new(&mut checked, label);
-        let resp = ui.add_enabled(clickable, checkbox).on_hover_text(hover);
+        let resp = ui
+            .add_enabled(clickable, checkbox)
+            .on_hover_text(hover.clone())
+            .on_disabled_hover_text(hover);
 
         if resp.clicked() {
             let command = if matches!(current, L2Status::Active { .. }) {
