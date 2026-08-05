@@ -1,19 +1,94 @@
-<!-- Define the Start Menu folder -->
-<Directory Id="ProgramMenuFolder">
-    <Directory Id="ApplicationProgramsFolder" Name="statorius"/>
-</Directory>
+<?xml version='1.0' encoding='windows-1252'?>
+<!--
+  statorius MSI installer definition.
 
-<!-- Define the shortcut component -->
-<DirectoryRef Id="ApplicationProgramsFolder">
-    <Component Id="ApplicationShortcut" Guid="93c95ab2-4c3a-4c13-ad63-acf5c5ef55da">
-        <Shortcut Id="ApplicationStartMenuShortcut"
-                  Name="statorius"
-                  Description="A brief description of statorius"
-                  Target="[APPLICATIONFOLDER]bin\statorius.exe"
-                  WorkingDirectory="APPLICATIONFOLDER"/>
+  NOTE: this file used to be just the Start Menu shortcut fragment below
+  (the <Directory>/<DirectoryRef> block), with no <?xml?> declaration and
+  no wrapping <Wix> root at all - which is exactly what WiX's CNDL0104
+  "multiple root elements" error was pointing at (two top-level elements,
+  neither one a single root). The Product/Package/Directory scaffolding
+  around it here is what actually tells WiX what to build and where to
+  install the exe; without it there was nothing for the shortcut fragment
+  to even attach to.
+-->
+<Wix xmlns='http://schemas.microsoft.com/wix/2006/wi'>
 
-        <!-- This ensures the shortcut is removed upon uninstall -->
-        <RemoveFolder Id="CleanUpShortCut" Directory="ApplicationProgramsFolder" On="uninstall"/>
-        <RegistryValue Root="HKCU" Key="Software\statorius" Name="installed" Type="integer" Value="1" KeyPath="yes"/>
-    </Component>
-</DirectoryRef>
+    <Product
+        Id='*'
+        Name='statorius'
+        UpgradeCode='870A35FB-245F-4F6E-A620-60EC0DE53E14'
+        Manufacturer='statorius'
+        Language='1033'
+        Codepage='1252'
+        Version='$(var.Version)'>
+
+        <Package Id='*'
+            Keywords='Installer'
+            Description='statorius network diagnostic tool installer'
+            Manufacturer='statorius'
+            InstallerVersion='450'
+            Languages='1033'
+            Compressed='yes'
+            InstallScope='perMachine'
+            SummaryCodepage='1252'/>
+
+        <MajorUpgrade
+            Schedule='afterInstallInitialize'
+            DowngradeErrorMessage='A newer version of [ProductName] is already installed. Setup will now exit.'/>
+
+        <Media Id='1' Cabinet='media1.cab' EmbedCab='yes' DiskPrompt='CD-ROM #1'/>
+        <Property Id='DiskPrompt' Value='statorius Installation'/>
+
+        <Directory Id='TARGETDIR' Name='SourceDir'>
+            <Directory Id='ProgramFiles64Folder' Name='PFiles'>
+                <Directory Id='APPLICATIONFOLDER' Name='statorius'>
+                    <Directory Id='Bin' Name='bin'>
+                        <Component Id='binary0' Guid='*'>
+                            <File
+                                Id='exe0'
+                                Source='$(var.CargoTargetBinDir)\statorius.exe'
+                                KeyPath='yes'/>
+                        </Component>
+                    </Directory>
+                </Directory>
+            </Directory>
+
+            <!-- Define the Start Menu folder -->
+            <Directory Id="ProgramMenuFolder">
+                <Directory Id="ApplicationProgramsFolder" Name="statorius"/>
+            </Directory>
+        </Directory>
+
+        <!-- Define the shortcut component -->
+        <DirectoryRef Id="ApplicationProgramsFolder">
+            <Component Id="ApplicationShortcut" Guid="93c95ab2-4c3a-4c13-ad63-acf5c5ef55da">
+                <Shortcut Id="ApplicationStartMenuShortcut"
+                          Name="statorius"
+                          Description="A brief description of statorius"
+                          Target="[APPLICATIONFOLDER]bin\statorius.exe"
+                          WorkingDirectory="APPLICATIONFOLDER"/>
+
+                <!-- This ensures the shortcut is removed upon uninstall -->
+                <RemoveFolder Id="CleanUpShortCut" Directory="ApplicationProgramsFolder" On="uninstall"/>
+                <RegistryValue Root="HKCU" Key="Software\statorius" Name="installed" Type="integer" Value="1" KeyPath="yes"/>
+            </Component>
+        </DirectoryRef>
+
+        <Feature
+            Id='Binaries'
+            Title='Application'
+            Description='Installs the statorius binary and its Start Menu shortcut.'
+            Level='1'
+            ConfigurableDirectory='APPLICATIONFOLDER'
+            AllowAdvertise='no'
+            Display='expand'
+            Absent='disallow'>
+            <ComponentRef Id='binary0'/>
+            <ComponentRef Id='ApplicationShortcut'/>
+        </Feature>
+
+        <SetProperty Id='ARPINSTALLLOCATION' Value='[APPLICATIONFOLDER]' After='CostFinalize'/>
+
+    </Product>
+
+</Wix>
