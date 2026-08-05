@@ -46,9 +46,7 @@ pub fn probe_l2_readiness() -> L2Readiness {
             detail: format!("Could not enumerate network devices: {e}"),
         },
         FindResult::NoUsableDevice => L2Readiness::Unavailable {
-            detail: "No usable network interface found to probe against (no loopback \
-                     interface, and no active non-loopback interface either)."
-                .to_owned(),
+            detail: "pcap reported zero network devices on this system.".to_owned(),
         },
         FindResult::Probed {
             name,
@@ -74,11 +72,7 @@ pub fn probe_l2_readiness() -> L2Readiness {
 pub fn try_open_promiscuous_probe() -> Result<String, String> {
     match find_probe_target_and_test() {
         FindResult::NoDevices(e) => Err(format!("Could not enumerate network devices: {e}")),
-        FindResult::NoUsableDevice => {
-            Err("No usable network interface found (no loopback interface, and no active \
-                 non-loopback interface either)."
-                .to_owned())
-        }
+        FindResult::NoUsableDevice => Err("pcap reported zero network devices on this system.".to_owned()),
         FindResult::Probed {
             name,
             result: Ok(()),
@@ -99,39 +93,63 @@ enum FindResult {
     },
 }
 
+/// Find a device we can genuinely open in promiscuous mode, and test it.
+///
+/// This used to pre-filter candidates with `d.flags.is_up() &&
+/// d.flags.is_running()` before ever trying to open anything, on the
+/// assumption that a failed open would "overwhelmingly likely" be a
+/// privilege issue. On Windows that assumption doesn't hold: Npcap derives
+/// those two flags by silently opening every enumerated adapter a second
+/// time internally (`PacketOpenAdapter`, see pcap-npf.c's `get_if_flags`)
+/// just to query its hardware status via an NDIS OID. If *that* internal
+/// open fails for any reason, both flags come back false - with no error
+/// surfaced anywhere - even for an adapter this app could open here just
+/// fine a moment later. Trusting the flags over the real open attempt was
+/// misclassifying perfectly usable systems as `Unavailable`.
+///
+/// So instead: try the loopback interface first if one exists (safest,
+/// since toggling promiscuous mode there can't affect real traffic), then
+/// fall through every other device pcap knows about, in enumeration order,
+/// actually attempting the open on each rather than pre-judging it by
+/// flags. First success wins; if every candidate fails, report the last
+/// failure (as good a representative as any of "what's actually wrong
+/// here").
 fn find_probe_target_and_test() -> FindResult {
-    let devices = match Device::list() {
+    let mut devices = match Device::list() {
         Ok(d) => d,
         Err(e) => return FindResult::NoDevices(e),
     };
-    let Some(target) = choose_probe_target(devices) else {
+    if devices.is_empty() {
         return FindResult::NoUsableDevice;
-    };
-    let name = target.name.clone();
-    let result = try_open_promiscuous(target);
-    FindResult::Probed { name, result }
-}
-
-/// Pick the best available device to probe against: a loopback interface if
-/// one exists (safest - can't disrupt real traffic), otherwise the first
-/// real interface that's actually up and running. Falling back like this is
-/// what keeps a missing/unconfigured loopback adapter (the normal case on a
-/// fresh Npcap install - see the module docs above) from being misdiagnosed
-/// as "L2 capture isn't possible on this system" when it may well be.
-fn choose_probe_target(mut devices: Vec<Device>) -> Option<Device> {
-    if let Some(idx) = devices.iter().position(|d| d.flags.is_loopback()) {
-        return Some(devices.swap_remove(idx));
     }
-    devices
-        .into_iter()
-        .find(|d| d.flags.is_up() && d.flags.is_running())
+
+    if let Some(idx) = devices.iter().position(|d| d.flags.is_loopback()) {
+        devices.swap(0, idx);
+    }
+
+    let mut last_failure: Option<(String, pcap::Error)> = None;
+    for device in devices {
+        let name = device.name.clone();
+        match try_open_promiscuous(device) {
+            Ok(()) => return FindResult::Probed { name, result: Ok(()) },
+            Err(e) => last_failure = Some((name, e)),
+        }
+    }
+
+    // Every candidate failed. `last_failure` is guaranteed Some here since
+    // we already returned early above for an empty device list.
+    let (name, e) = last_failure.expect("devices was non-empty, so a failure was recorded");
+    FindResult::Probed {
+        name,
+        result: Err(e),
+    }
 }
 
 /// Briefly open (and immediately close, on scope exit) a promiscuous-mode
 /// capture handle on `device`. No packets are ever read - opening and
 /// closing the handle is the entire test. `device` may be a loopback
 /// interface or, when none is available, a real one (see
-/// `choose_probe_target`); either way this never blocks waiting for
+/// `find_probe_target_and_test`); either way this never blocks waiting for
 /// traffic and never reads a single packet, so it's safe to run against a
 /// live interface.
 fn try_open_promiscuous(device: Device) -> Result<(), pcap::Error> {

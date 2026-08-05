@@ -48,7 +48,7 @@ fn sniffer_loop(tx: mpsc::UnboundedSender<DhcpMessageWire>, ready_tx: oneshot::S
         }
     };
 
-    let mut cap = match open_capture(&ctx.name) {
+    let mut cap = match open_capture(&ctx) {
         Ok(c) => c,
         Err(e) => {
             eprintln!("dhcp-sniffer: failed to open '{}': {e}", ctx.name);

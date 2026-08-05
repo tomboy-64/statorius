@@ -103,7 +103,7 @@ fn engine_loop(mut rx: mpsc::Receiver<L2Job>) {
         }
     };
 
-    let mut cap = match open_capture(&ctx.name) {
+    let mut cap = match open_capture(&ctx) {
         Ok(c) => c,
         Err(e) => {
             drain_with_error(&mut rx, format!("Failed to open '{}': {e}", ctx.name));
@@ -171,13 +171,28 @@ fn drain_with_error(rx: &mut mpsc::Receiver<L2Job>, message: String) {
 /// settings, rather than duplicating them - it never shares *this* handle,
 /// since that would mean competing with the job engine's one-at-a-time
 /// send/wait loop for reads.
-pub(crate) fn open_capture(interface_name: &str) -> Result<pcap::Capture<pcap::Active>, pcap::Error> {
+///
+/// Matches by name first (works as-is on Linux/macOS, where `default-net`
+/// and `pcap` both report the plain OS interface name, e.g. "eth0") and
+/// falls back to matching by this interface's own IPv4 address. The
+/// fallback is what actually matters on Windows: `default-net` sets
+/// `InterfaceContext::name` from `GetAdaptersAddresses`'s `AdapterName`,
+/// which is the bare adapter GUID (e.g. "{4D36E972-...}"), while Npcap
+/// names the same device "\\Device\\NPF_{4D36E972-...}" - never equal, so a
+/// name-only match here silently failed on every Windows machine
+/// regardless of privileges. Matching by address sidesteps the naming
+/// convention entirely.
+pub(crate) fn open_capture(ctx: &InterfaceContext) -> Result<pcap::Capture<pcap::Active>, pcap::Error> {
+    let target_ip = IpAddr::V4(ctx.ipv4);
     let device = pcap::Device::list()?
         .into_iter()
-        .find(|d| d.name == interface_name)
-        .ok_or(pcap::Error::PcapError(format!(
-            "interface '{interface_name}' not found by pcap"
-        )))?;
+        .find(|d| d.name == ctx.name || d.addresses.iter().any(|a| a.addr == target_ip))
+        .ok_or_else(|| {
+            pcap::Error::PcapError(format!(
+                "no pcap device found matching interface '{}' (name or address {})",
+                ctx.name, ctx.ipv4
+            ))
+        })?;
     pcap::Capture::from_device(device)?
         .promisc(true)
         .snaplen(65535)
