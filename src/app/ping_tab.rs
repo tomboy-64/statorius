@@ -9,32 +9,51 @@ use super::widgets::{render_average_indicator, render_last_indicator, render_sin
 use super::StatoriusApp;
 
 impl StatoriusApp {
-    /// Starts (or restarts) continuous pinging of whatever IP is currently
-    /// typed into the input box. If it's not a literal IP address, kicks off
-    /// a background DNS lookup instead (see `poll_dns_resolution`) rather
-    /// than pinging anything yet - the resolved address(es) replace the
-    /// input, and the user submits again (now against a literal IP) to
-    /// actually start the ping.
+    /// Starts (or restarts) continuous pinging of whatever is currently
+    /// typed into the input box. Literal IPs are started immediately - and
+    /// that includes a comma-separated list of them, which is exactly what
+    /// a multi-address DNS resolution below leaves in the box, so every
+    /// resolved address actually gets used on the follow-up submit rather
+    /// than just the first one. If the input isn't (entirely) literal IPs,
+    /// it's tried as a single hostname instead: a background DNS lookup is
+    /// kicked off (see `poll_dns_resolution`) rather than pinging anything
+    /// yet - the resolved address(es) replace the input, and the user
+    /// submits again to actually start the ping(s).
     fn submit_ping_target(&mut self) {
         let trimmed = self.target_input.trim().to_owned();
-        match trimmed.parse::<IpAddr>() {
-            Ok(target) => {
+
+        let parts: Vec<&str> = trimmed
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .collect();
+        let literal_ips: Result<Vec<IpAddr>, _> =
+            parts.iter().map(|p| p.parse::<IpAddr>()).collect();
+
+        match literal_ips {
+            Ok(targets) if !targets.is_empty() => {
                 self.last_error = None;
                 self.dns_failed_for = None;
-                let request = PingRequest {
-                    target,
-                    method: PingMethod::Icmp,
-                    source_ip: None,
-                };
-                if let Err(e) = self.tx.try_send(WorkerCommand::Start(request)) {
-                    self.last_error = Some(format!("Failed to queue ping: {e}"));
+                let mut failures = Vec::new();
+                for target in targets {
+                    let request = PingRequest {
+                        target,
+                        method: PingMethod::Icmp,
+                        source_ip: None,
+                    };
+                    if let Err(e) = self.tx.try_send(WorkerCommand::Start(request)) {
+                        failures.push(format!("{target}: {e}"));
+                    }
+                }
+                if !failures.is_empty() {
+                    self.last_error = Some(format!("Failed to queue: {}", failures.join("; ")));
                 }
             }
-            Err(_) => {
-                // Not a literal IP - try it as a hostname. A lookup already
-                // in flight for a previous entry gets to finish first;
-                // re-pressing Enter/Ping while waiting is a no-op rather
-                // than firing off a second, overlapping request.
+            _ => {
+                // Not (all) literal IPs - try it as a hostname. A lookup
+                // already in flight for a previous entry gets to finish
+                // first; re-pressing Enter/Ping while waiting is a no-op
+                // rather than firing off a second, overlapping request.
                 if self.dns_resolve_rx.is_some() {
                     return;
                 }
