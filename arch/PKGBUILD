@@ -1,6 +1,6 @@
 # Maintainer: Your Name <your.email@example.com>
 pkgname=statorius
-pkgver=0.4.5
+pkgver=0.4.6
 pkgrel=1
 pkgdesc="A networking toolkit"
 arch=('x86_64')

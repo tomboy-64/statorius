@@ -81,17 +81,52 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
           path: artifacts
 
+      # -----------------------------------------------------
+      # NEW: Keep arch/PKGBUILD's version in sync with Cargo.toml
+      # instead of hand-maintaining it (this is what let pkgver drift
+      # to 0.4.5 while Cargo.toml had already moved to 0.4.6). Also
+      # fails the release outright if Cargo.toml and the pushed tag
+      # ever disagree, and pins the source tarball checksum for this
+      # exact tag instead of leaving it as 'SKIP'.
+      # -----------------------------------------------------
+      - name: Sync arch/PKGBUILD version with Cargo.toml
+        run: |
+          set -euo pipefail
+          CARGO_VERSION=$(grep -m1 '^version' Cargo.toml | sed -E 's/version *= *"([^"]+)"/\1/')
+          TAG_VERSION=${GITHUB_REF_NAME#v}
+          echo "Cargo.toml version: $CARGO_VERSION"
+          echo "Git tag version:    $TAG_VERSION"
+          if [ "$CARGO_VERSION" != "$TAG_VERSION" ]; then
+            echo "::error::Cargo.toml version ($CARGO_VERSION) does not match the pushed tag ($GITHUB_REF_NAME) - refusing to publish a mismatched PKGBUILD."
+            exit 1
+          fi
+
+          sed -i "s/^pkgver=.*/pkgver=${CARGO_VERSION}/" arch/PKGBUILD
+
+          curl -sL -o /tmp/source.tar.gz \
+            "https://github.com/${{ github.repository }}/archive/refs/tags/${GITHUB_REF_NAME}.tar.gz"
+          SUM=$(sha256sum /tmp/source.tar.gz | awk '{print $1}')
+          # Only the first SKIP (the fetched source tarball) gets pinned -
+          # the second is the locally-provided .desktop file, left as-is.
+          sed -i "0,/'SKIP'/s//'${SUM}'/" arch/PKGBUILD
+
+          cat arch/PKGBUILD
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          # NEW: Added the MSI folder to the files list
+          # NEW: Added the MSI folder and the version-synced PKGBUILD to the files list
           files: |
             artifacts/statorius-linux-amd64/*
             artifacts/statorius-windows-amd64.exe/*
             artifacts/statorius-windows-installer/*
+            arch/PKGBUILD
           generate_release_notes: true

@@ -1,7 +1,8 @@
 [package]
 name = "statorius"
-version = "0.4.7"
+version = "0.4.8"
 edition = "2024"
+license = "AGPL-3.0-only"
 
 [profile.release]
 lto = true          # Link Time Optimization: merges all crates into one unit

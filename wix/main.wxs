@@ -42,6 +42,9 @@
         <Directory Id='TARGETDIR' Name='SourceDir'>
             <Directory Id='ProgramFiles64Folder' Name='PFiles'>
                 <Directory Id='APPLICATIONFOLDER' Name='statorius'>
+                    <Component Id='License' Guid='*'>
+                        <File Id='LicenseFile' Name='License.rtf' DiskId='1' Source='wix\License.rtf' KeyPath='yes'/>
+                    </Component>
                     <Directory Id='Bin' Name='bin'>
                         <Component Id='binary0' Guid='*'>
                             <File
@@ -83,11 +86,18 @@
             AllowAdvertise='no'
             Display='expand'
             Absent='disallow'>
+            <ComponentRef Id='License'/>
             <ComponentRef Id='binary0'/>
             <ComponentRef Id='ApplicationShortcut'/>
         </Feature>
 
         <SetProperty Id='ARPINSTALLLOCATION' Value='[APPLICATIONFOLDER]' After='CostFinalize'/>
+
+        <!-- Shows the AGPL-3.0 text (wix\License.rtf) as an install-time
+             license agreement dialog the user has to accept before
+             install proceeds. -->
+        <WixVariable Id='WixUILicenseRtf' Value='wix\License.rtf'/>
+        <UIRef Id='WixUI_Minimal'/>
 
     </Product>
 
