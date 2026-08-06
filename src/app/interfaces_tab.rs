@@ -1,31 +1,75 @@
 use std::time::{Duration, Instant};
 use eframe::egui;
+use tokio::sync::oneshot;
 
 use super::StatoriusApp;
 
 impl StatoriusApp {
-    fn update_interfaces(&mut self) {
-        self.interface_update = Instant::now();
-        self.interfaces = default_net::get_interfaces();
-        self.interface_update = Instant::now();
+    /// Kicks off a background refresh of `self.interfaces`, unless one is
+    /// already in flight. `default_net::get_interfaces()` is a blocking OS
+    /// call - on Windows in particular, enumerating adapters can
+    /// occasionally take a noticeable amount of time - so it never runs
+    /// directly on the UI thread: it's offloaded to a tokio blocking-pool
+    /// thread via `spawn_blocking` and the result is picked up later by
+    /// `poll_interfaces_refresh`, the same non-blocking `try_recv` pattern
+    /// every other background operation in this app already uses (DNS
+    /// lookups, L2 duplicate-checks, ...). This was the one place in the
+    /// UI that didn't follow that pattern - it called the OS directly,
+    /// once a second, right on the render thread, which is exactly the
+    /// kind of thing that shows up as the whole window periodically
+    /// freezing rather than just this one tab lagging.
+    fn start_interfaces_refresh(&mut self) {
+        if self.interfaces_refresh_rx.is_some() {
+            return; // already running - let it finish before starting another
+        }
+        let (tx, rx) = oneshot::channel();
+        self.interfaces_refresh_rx = Some(rx);
+        tokio::task::spawn_blocking(move || {
+            let _ = tx.send(default_net::get_interfaces());
+        });
+    }
 
-        self.interfaces_open.resize(
-            self.interfaces
-                .iter()
-                .map(|iface| iface.index)
-                .max()
-                .unwrap_or(0) as usize + 1,
-            (false,false,false)
-        )
+    /// Checks whether the in-flight refresh (if any) has finished, and
+    /// applies it - same shape as `ping_tab`'s `poll_dns_resolution`.
+    /// Called once per frame while the Interfaces tab is shown.
+    fn poll_interfaces_refresh(&mut self) {
+        let Some(rx) = &mut self.interfaces_refresh_rx else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok(interfaces) => {
+                self.interfaces_refresh_rx = None;
+                self.interface_update = Instant::now();
+                self.interfaces = interfaces;
+                self.interfaces_open.resize(
+                    self.interfaces
+                        .iter()
+                        .map(|iface| iface.index)
+                        .max()
+                        .unwrap_or(0) as usize
+                        + 1,
+                    (false, false, false),
+                );
+            }
+            Err(oneshot::error::TryRecvError::Empty) => {}
+            Err(oneshot::error::TryRecvError::Closed) => {
+                // Extremely unlikely (the blocking task would have to
+                // panic), but reset the timer regardless so a persistent
+                // failure doesn't retry every single frame forever.
+                self.interfaces_refresh_rx = None;
+                self.interface_update = Instant::now();
+            }
+        }
     }
 
     pub(super) fn ui_interfaces_tab(&mut self, ui: &mut egui::Ui) {
+        self.poll_interfaces_refresh();
+
         // Top bar for controls
         ui.horizontal(|ui| {
             ui.heading("Network Interfaces");
-            // Prevent querying the OS 60 times a second
             if ui.button("Refresh Interfaces").clicked() {
-                self.interfaces = default_net::get_interfaces();
+                self.start_interfaces_refresh();
             }
         });
 
@@ -33,8 +77,13 @@ impl StatoriusApp {
 
         // Scroll area for the interface list
         egui::ScrollArea::vertical().show(ui, |ui| {
+            // Prevent querying the OS 60 times a second - but never do the
+            // querying itself right here; just kick off the background
+            // refresh once a second and let `poll_interfaces_refresh`
+            // (called at the top of this function, every frame) pick up
+            // the result whenever it arrives.
             if self.interface_update.elapsed() >= Duration::from_secs(1) {
-                self.update_interfaces();
+                self.start_interfaces_refresh();
             }
 
             for iface in &self.interfaces {

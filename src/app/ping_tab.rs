@@ -1,4 +1,6 @@
+use std::collections::VecDeque;
 use std::net::IpAddr;
+use std::path::PathBuf;
 use eframe::egui;
 use tokio::sync::{mpsc, oneshot};
 
@@ -7,6 +9,43 @@ use crate::state::{PingEntry, PingMethod, PingRequest, WorkerCommand};
 
 use super::widgets::{render_average_indicator, render_last_indicator, render_since_indicator};
 use super::StatoriusApp;
+
+/// Line ending used when *writing* a `.ips` file - matches the platform's
+/// own convention (Notepad and friends still care on Windows). Reading
+/// never needs the counterpart of this: `str::lines()` already treats a
+/// trailing `\r` before `\n` as part of the line ending, so a file saved on
+/// one platform loads back cleanly on the other without any special-casing
+/// here.
+#[cfg(windows)]
+const NATIVE_NEWLINE: &str = "\r\n";
+#[cfg(not(windows))]
+const NATIVE_NEWLINE: &str = "\n";
+
+/// Progress of an in-flight `.ips` file load. Entries that already parse as
+/// literal IPs are resolved immediately - no DNS round trip needed at all -
+/// while anything else is queued here and resolved one hostname at a time
+/// against the same DNS servers the Ping tab's own single-hostname lookups
+/// use. There's only ever one `dns_worker` request in flight per
+/// `StatoriusApp`, so a whole file of hostnames drains sequentially rather
+/// than fanning out in parallel.
+pub(super) struct PingListLoadState {
+    /// For the final summary message and the error window's title.
+    path: PathBuf,
+    /// Hostnames still waiting their turn.
+    queue: VecDeque<String>,
+    /// The one lookup currently running, if any, plus which hostname it's
+    /// for - needed to attribute the reply, and to name it on failure.
+    in_flight: Option<(String, oneshot::Receiver<Result<Vec<IpAddr>, String>>)>,
+    /// Every address collected so far: literal IPs read straight from the
+    /// file, plus whatever the queue has resolved as it drains.
+    resolved: Vec<IpAddr>,
+    /// `"<entry>: <reason>"` for every line that was neither a valid IP nor
+    /// a hostname that resolved. The reason is always the resolver's own
+    /// error message (or the specific local failure, e.g. a full send
+    /// queue) - never invented here, per the request that these be
+    /// accurate rather than generic.
+    errors: Vec<String>,
+}
 
 impl StatoriusApp {
     /// Starts (or restarts) continuous pinging of whatever is currently
@@ -114,8 +153,198 @@ impl StatoriusApp {
         }
     }
 
+    /// Writes every currently-known target (running or paused - everything
+    /// `snapshot()` returns), one literal IP per line, to `filename`
+    /// (appending `.ips` if it doesn't already end in that) in the same
+    /// directory as the running executable. Always literal IPs, never
+    /// hostnames - resolving is strictly a *load*-time concern, so a saved
+    /// file is exactly what a fresh load of it would reproduce with zero
+    /// DNS activity.
+    fn save_ping_targets(&mut self, filename: &str) {
+        let filename = normalize_ping_list_filename(filename.trim());
+        let Some(path) = ping_list_file_path(&filename) else {
+            self.ping_list_io_message = Some((
+                true,
+                "Could not determine the program's directory".to_owned(),
+            ));
+            return;
+        };
+
+        let targets: Vec<IpAddr> = self.state.snapshot().into_iter().map(|e| e.target).collect();
+        let contents =
+            targets.iter().map(IpAddr::to_string).collect::<Vec<_>>().join(NATIVE_NEWLINE);
+
+        match std::fs::write(&path, contents) {
+            Ok(()) => {
+                self.ping_list_io_message = Some((
+                    false,
+                    format!("Saved {} target(s) to {}", targets.len(), path.display()),
+                ));
+                self.ping_list_save_input = None;
+            }
+            Err(e) => {
+                self.ping_list_io_message =
+                    Some((true, format!("Failed to save '{}': {e}", path.display())));
+            }
+        }
+    }
+
+    /// Reads `filename` (appending `.ips` if needed) and kicks off loading
+    /// it: every line that parses as a literal IPv4/IPv6 address is used as
+    /// is, and everything else is queued to be resolved as a hostname (both
+    /// A and AAAA - see `net::dns::resolve`) by `poll_ping_list_load` over
+    /// the following frames. Nothing is actually started as a ping target
+    /// yet - that only happens once the whole file has finished draining,
+    /// so a file of several hostnames doesn't start pinging some of them
+    /// noticeably before others.
+    fn load_ping_targets(&mut self, filename: &str) {
+        let filename = normalize_ping_list_filename(filename.trim());
+        let Some(path) = ping_list_file_path(&filename) else {
+            self.ping_list_io_message = Some((
+                true,
+                "Could not determine the program's directory".to_owned(),
+            ));
+            return;
+        };
+
+        let contents = match std::fs::read_to_string(&path) {
+            Ok(c) => c,
+            Err(e) => {
+                self.ping_list_io_message =
+                    Some((true, format!("Failed to open '{}': {e}", path.display())));
+                return;
+            }
+        };
+
+        let mut resolved = Vec::new();
+        let mut queue = VecDeque::new();
+        for line in contents.lines() {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            match line.parse::<IpAddr>() {
+                Ok(ip) => resolved.push(ip),
+                Err(_) => queue.push_back(line.to_owned()),
+            }
+        }
+
+        self.ping_list_load_input = None;
+        self.ping_list_io_message = None;
+        self.ping_list_load_state = Some(PingListLoadState {
+            path,
+            queue,
+            in_flight: None,
+            resolved,
+            errors: Vec::new(),
+        });
+    }
+
+    /// Drives an in-progress `.ips` load, one step per frame: checks the
+    /// current lookup (if any) for a reply, starts the next queued
+    /// hostname's lookup once the previous one is done, and - once both the
+    /// queue and any in-flight lookup are empty - finalizes the batch:
+    /// every resolved address (literal IPs from the file plus everything
+    /// the queue resolved) is started as a ping target, and if anything
+    /// failed to parse or resolve, `ping_list_errors` is set so the error
+    /// window renders with the specific reason for each.
+    fn poll_ping_list_load(&mut self) {
+        // Step 1: check the current in-flight lookup, if any, for a reply.
+        if let Some(load) = &mut self.ping_list_load_state {
+            if let Some((name, rx)) = &mut load.in_flight {
+                match rx.try_recv() {
+                    Ok(Ok(addrs)) => {
+                        load.resolved.extend(addrs);
+                        load.in_flight = None;
+                    }
+                    Ok(Err(reason)) => {
+                        load.errors.push(format!("{name}: {reason}"));
+                        load.in_flight = None;
+                    }
+                    Err(oneshot::error::TryRecvError::Empty) => return,
+                    Err(oneshot::error::TryRecvError::Closed) => {
+                        load.errors
+                            .push(format!("{name}: lookup channel closed unexpectedly"));
+                        load.in_flight = None;
+                    }
+                }
+            }
+        }
+
+        // Step 2: nothing in flight - start the next queued hostname, if
+        // any. Kept as its own step (rather than nested in step 1's borrow)
+        // since it needs `self.dns_shared`/`dns_selected`/`dns_tx` too.
+        let next_name = match &mut self.ping_list_load_state {
+            Some(load) if load.in_flight.is_none() => load.queue.pop_front(),
+            _ => None,
+        };
+        if let Some(name) = next_name {
+            let servers: Vec<IpAddr> = self
+                .dns_shared
+                .get()
+                .into_iter()
+                .filter(|ip| *self.dns_selected.get(ip).unwrap_or(&true))
+                .collect();
+            let (respond_to, rx) = oneshot::channel();
+            let command = DnsCommand::Resolve {
+                name: name.clone(),
+                servers,
+                respond_to,
+            };
+            let send_ok = self.dns_tx.try_send(command).is_ok();
+
+            let load = self
+                .ping_list_load_state
+                .as_mut()
+                .expect("just matched Some above");
+            if send_ok {
+                load.in_flight = Some((name, rx));
+            } else {
+                load.errors.push(format!("{name}: DNS worker unavailable"));
+            }
+            return;
+        }
+
+        // Step 3: queue drained and nothing in flight - finalize, if
+        // there's actually a load in progress at all.
+        let done = matches!(
+            &self.ping_list_load_state,
+            Some(load) if load.in_flight.is_none() && load.queue.is_empty()
+        );
+        if done {
+            let load = self.ping_list_load_state.take().expect("checked Some above");
+            let mut failures = Vec::new();
+            for target in &load.resolved {
+                let request = PingRequest {
+                    target: *target,
+                    method: PingMethod::Icmp,
+                    source_ip: None,
+                };
+                if let Err(e) = self.tx.try_send(WorkerCommand::Start(request)) {
+                    failures.push(format!("{target}: {e}"));
+                }
+            }
+
+            self.ping_list_io_message = Some((
+                false,
+                format!(
+                    "Loaded {} target(s) from {}",
+                    load.resolved.len(),
+                    load.path.display()
+                ),
+            ));
+
+            let mut errors = load.errors;
+            errors.extend(failures);
+            if !errors.is_empty() {
+                self.ping_list_errors = Some(errors);
+            }
+        }
+    }
+
     pub(super) fn ui_ping_tab(&mut self, ui: &mut egui::Ui) {
         self.poll_dns_resolution();
+        self.poll_ping_list_load();
 
         // The failed-lookup highlight only applies to the exact text that
         // failed - the moment the user types anything else, this clears on
@@ -143,10 +372,101 @@ impl StatoriusApp {
             if is_resolving {
                 ui.weak("resolving\u{2026}");
             }
+
+            // Save/load icons for the target list, right-aligned in the
+            // same row - same 💾/📁 pattern as the DNS Servers tab, just
+            // against `.ips` files (one literal IP per line) instead of
+            // `.dns` files.
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let open_load = ui
+                    .button(egui::RichText::new("\u{1F4C1}").size(26.0)) // 📁
+                    .on_hover_text("Load a target list from a .ips file")
+                    .clicked();
+                let open_save = ui
+                    .button(egui::RichText::new("\u{1F4BE}").size(26.0)) // 💾
+                    .on_hover_text("Save the current target list to a .ips file")
+                    .clicked();
+                if open_save {
+                    self.ping_list_load_input = None;
+                    self.ping_list_save_input = Some(String::new());
+                }
+                if open_load {
+                    self.ping_list_save_input = None;
+                    self.ping_list_load_input = Some(String::new());
+                }
+            });
         });
 
         if let Some(err) = &self.last_error {
             ui.colored_label(egui::Color32::RED, err);
+        }
+
+        let mut save_now: Option<String> = None;
+        let mut cancel_save = false;
+        if let Some(name) = &mut self.ping_list_save_input {
+            ui.horizontal(|ui| {
+                ui.label("Save as:");
+                let response = ui.add(
+                    egui::TextEdit::singleline(name)
+                        .desired_width(200.0)
+                        .hint_text("filename"),
+                );
+                let enter_pressed =
+                    response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                if ui.button("Save").clicked() || enter_pressed {
+                    save_now = Some(name.clone());
+                }
+                if ui.small_button("Cancel").clicked() {
+                    cancel_save = true;
+                }
+            });
+        }
+        if cancel_save {
+            self.ping_list_save_input = None;
+        }
+        if let Some(name) = save_now {
+            self.save_ping_targets(&name);
+        }
+
+        let mut load_now: Option<String> = None;
+        let mut cancel_load = false;
+        if let Some(name) = &mut self.ping_list_load_input {
+            ui.horizontal(|ui| {
+                ui.label("Open:");
+                let response = ui.add(
+                    egui::TextEdit::singleline(name)
+                        .desired_width(200.0)
+                        .hint_text("filename"),
+                );
+                let enter_pressed =
+                    response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                if ui.button("Open").clicked() || enter_pressed {
+                    load_now = Some(name.clone());
+                }
+                if ui.small_button("Cancel").clicked() {
+                    cancel_load = true;
+                }
+            });
+        }
+        if cancel_load {
+            self.ping_list_load_input = None;
+        }
+        if let Some(name) = load_now {
+            self.load_ping_targets(&name);
+        }
+
+        if let Some(load) = &self.ping_list_load_state {
+            let remaining = load.queue.len() + load.in_flight.is_some() as usize;
+            ui.weak(format!("loading target list\u{2026} ({remaining} left)"));
+        }
+
+        if let Some((is_error, message)) = &self.ping_list_io_message {
+            let color = if *is_error {
+                egui::Color32::RED
+            } else {
+                egui::Color32::from_rgb(60, 170, 60)
+            };
+            ui.colored_label(color, message);
         }
 
         ui.separator();
@@ -178,6 +498,42 @@ impl StatoriusApp {
                     }
                 });
         });
+
+        // Error window: only ever shown after a file load finishes with at
+        // least one entry that was neither a valid IP nor a resolvable
+        // hostname. Non-modal (doesn't block the rest of the UI) - closing
+        // it (either the titlebar X or the OK button) just dismisses it,
+        // the successfully-resolved targets from the same load have
+        // already been started regardless.
+        if let Some(errors) = self.ping_list_errors.clone() {
+            let mut still_open = true;
+            let mut close_via_button = false;
+            egui::Window::new("Some entries could not be loaded")
+                .collapsible(false)
+                .resizable(true)
+                .default_width(420.0)
+                .open(&mut still_open)
+                .show(ui.ctx(), |ui| {
+                    let count = errors.len();
+                    ui.label(format!(
+                        "{count} entr{} could not be added:",
+                        if count == 1 { "y" } else { "ies" }
+                    ));
+                    ui.add_space(4.0);
+                    egui::ScrollArea::vertical().max_height(240.0).show(ui, |ui| {
+                        for err in &errors {
+                            ui.colored_label(egui::Color32::RED, err);
+                        }
+                    });
+                    ui.add_space(8.0);
+                    if ui.button("OK").clicked() {
+                        close_via_button = true;
+                    }
+                });
+            if !still_open || close_via_button {
+                self.ping_list_errors = None;
+            }
+        }
     }
 }
 
@@ -212,4 +568,21 @@ fn render_controls(ui: &mut egui::Ui, entry: &PingEntry, tx: &mpsc::Sender<Worke
             let _ = tx.try_send(WorkerCommand::Delete(entry.target));
         }
     });
+}
+
+/// Appends `.ips` unless `name` already ends in it.
+fn normalize_ping_list_filename(name: &str) -> String {
+    if name.ends_with(".ips") {
+        name.to_owned()
+    } else {
+        format!("{name}.ips")
+    }
+}
+
+/// Resolves `filename` against the directory the running executable lives
+/// in - same convention `dns_tab` uses for `.dns` files.
+fn ping_list_file_path(filename: &str) -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let dir = exe.parent()?;
+    Some(dir.join(filename))
 }

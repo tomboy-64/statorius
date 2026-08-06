@@ -19,6 +19,7 @@ mod ping_tab;
 mod widgets;
 
 use l2_tab::{render_l2_checkbox, L2InputValidation};
+use ping_tab::PingListLoadState;
 
 /// Which tab is currently shown. "L2 Ping" is only ever selectable when
 /// L2 mode is actually active - see `render_tab_bar`.
@@ -86,6 +87,10 @@ pub struct StatoriusApp {
     interfaces: Vec<default_net::Interface>,
     interface_update: Instant,
     interfaces_open: Vec::<(bool,bool,bool)>, // (outer is open, inner is open, ip is valid)
+    /// `Some` while a background `default_net::get_interfaces()` call is in
+    /// flight - see `interfaces_tab::start_interfaces_refresh`. Never
+    /// called directly on the UI thread.
+    interfaces_refresh_rx: Option<oneshot::Receiver<Vec<default_net::Interface>>>,
 
     /// Captured DHCP exchanges for the "DHCP" tab - written by
     /// `l2_manager` as they're captured, read via `.snapshot()` every
@@ -143,6 +148,26 @@ pub struct StatoriusApp {
     /// Result of the last save/load attempt, shown under the 💾/📁 row
     /// until the next one replaces it - `(is_error, message)`.
     dns_io_message: Option<(bool, String)>,
+
+    /// `Some(filename-in-progress)` while the Ping tab's "save as" field is
+    /// open for the target list; `None` otherwise. Only one of this and
+    /// `ping_list_load_input` is open at a time - same pattern as the DNS
+    /// tab's save/load pair.
+    ping_list_save_input: Option<String>,
+    /// `Some(filename-in-progress)` while the Ping tab's "open" field is
+    /// open for the target list; `None` otherwise.
+    ping_list_load_input: Option<String>,
+    /// Result of the last target-list save/load attempt, shown the same
+    /// way `dns_io_message` is - `(is_error, message)`.
+    ping_list_io_message: Option<(bool, String)>,
+    /// `Some` while a `.ips` file load is draining its queue of hostnames
+    /// still needing DNS resolution - see `ping_tab::poll_ping_list_load`.
+    ping_list_load_state: Option<PingListLoadState>,
+    /// Set once a `.ips` load finishes with at least one entry that was
+    /// neither a valid IP nor a resolvable hostname - each already
+    /// formatted as `"<entry>: <reason>"`. Drives the error window; `None`
+    /// means nothing to show.
+    ping_list_errors: Option<Vec<String>>,
 }
 
 impl StatoriusApp {
@@ -184,6 +209,7 @@ impl StatoriusApp {
             interfaces: default_net::get_interfaces(),
             interface_update: Instant::now(),
             interfaces_open: Vec::new(),
+            interfaces_refresh_rx: None,
             dhcp_state,
             dhcp_open: std::collections::HashMap::new(),
             dns_shared,
@@ -198,6 +224,11 @@ impl StatoriusApp {
             dns_save_input: None,
             dns_load_input: None,
             dns_io_message: None,
+            ping_list_save_input: None,
+            ping_list_load_input: None,
+            ping_list_io_message: None,
+            ping_list_load_state: None,
+            ping_list_errors: None,
         }
     }
 }
