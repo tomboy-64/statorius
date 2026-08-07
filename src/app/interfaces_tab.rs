@@ -12,12 +12,7 @@ impl StatoriusApp {
     /// directly on the UI thread: it's offloaded to a tokio blocking-pool
     /// thread via `spawn_blocking` and the result is picked up later by
     /// `poll_interfaces_refresh`, the same non-blocking `try_recv` pattern
-    /// every other background operation in this app already uses (DNS
-    /// lookups, L2 duplicate-checks, ...). This was the one place in the
-    /// UI that didn't follow that pattern - it called the OS directly,
-    /// once a second, right on the render thread, which is exactly the
-    /// kind of thing that shows up as the whole window periodically
-    /// freezing rather than just this one tab lagging.
+    /// every other background operation in this app already uses.
     fn start_interfaces_refresh(&mut self) {
         if self.interfaces_refresh_rx.is_some() {
             return; // already running - let it finish before starting another
@@ -32,6 +27,16 @@ impl StatoriusApp {
     /// Checks whether the in-flight refresh (if any) has finished, and
     /// applies it - same shape as `ping_tab`'s `poll_dns_resolution`.
     /// Called once per frame while the Interfaces tab is shown.
+    ///
+    /// Deliberately does NOT touch `interfaces_open` here - sizing that to
+    /// match `interfaces` used to happen only on this completion path,
+    /// which left a real gap: `interfaces` is also populated synchronously
+    /// once at startup (`StatoriusApp::new`), so the very first time this
+    /// tab was opened - before any background refresh had a chance to
+    /// finish - the render loop below would index into a still-empty
+    /// `interfaces_open` and panic immediately. `interface_open_state`
+    /// grows the vec on demand instead, so there's no ordering between the
+    /// two lists to keep in sync at all, here or anywhere else.
     fn poll_interfaces_refresh(&mut self) {
         let Some(rx) = &mut self.interfaces_refresh_rx else {
             return;
@@ -41,15 +46,6 @@ impl StatoriusApp {
                 self.interfaces_refresh_rx = None;
                 self.interface_update = Instant::now();
                 self.interfaces = interfaces;
-                self.interfaces_open.resize(
-                    self.interfaces
-                        .iter()
-                        .map(|iface| iface.index)
-                        .max()
-                        .unwrap_or(0) as usize
-                        + 1,
-                    (false, false, false),
-                );
             }
             Err(oneshot::error::TryRecvError::Empty) => {}
             Err(oneshot::error::TryRecvError::Closed) => {
@@ -97,14 +93,17 @@ impl StatoriusApp {
 
                 let has_valid_ip = (!iface.ipv4.is_empty()) && (!iface.ipv6.is_empty());
 
-                if has_valid_ip && (!self.interfaces_open[iface.index as usize].2) {
-                    self.interfaces_open[iface.index as usize].0 = true;
-                    self.interfaces_open[iface.index as usize].2 = true;
+                let index = iface.index as usize;
+                if has_valid_ip && !interface_open_state(&mut self.interfaces_open, index).2 {
+                    let state = interface_open_state(&mut self.interfaces_open, index);
+                    state.0 = true;
+                    state.2 = true;
                 }
 
                 // The unique title string acts as its own ID naturally.
+                let outer_open = interface_open_state(&mut self.interfaces_open, index).0;
                 let outer_header_resp = egui::CollapsingHeader::new(format!("{} ({})", iface.name, mac_str))
-                    .open(Some(self.interfaces_open[iface.index as usize].0))
+                    .open(Some(outer_open))
                     .show(ui, |ui| {
 
                         // Friendly Name (Very useful on Windows)
@@ -157,8 +156,9 @@ impl StatoriusApp {
 
                         // --- Advanced Details Toggle ---
                         // Egui automatically scopes this ID to the parent header
+                        let inner_open = interface_open_state(&mut self.interfaces_open, index).1;
                         let inner_header_resp = egui::CollapsingHeader::new("Advanced")
-                            .open(Some(self.interfaces_open[iface.index as usize].1))
+                            .open(Some(inner_open))
                             .show(ui, |ui| {
 
                                 // Description (Often populated on Linux/macOS)
@@ -202,15 +202,31 @@ impl StatoriusApp {
                                 });
                             });
                         if inner_header_resp.header_response.clicked() {
-                            self.interfaces_open[iface.index as usize].1 = !self.interfaces_open[iface.index as usize].1;
+                            interface_open_state(&mut self.interfaces_open, index).1 =
+                                !interface_open_state(&mut self.interfaces_open, index).1;
                         }
                     });
                 if outer_header_resp.header_response.clicked() {
-                    self.interfaces_open[iface.index as usize].0 = !self.interfaces_open[iface.index as usize].0;
+                    interface_open_state(&mut self.interfaces_open, index).0 =
+                        !interface_open_state(&mut self.interfaces_open, index).0;
                 }
             }
         });
     }
+}
+
+/// Returns a mutable reference to `open[index]`, growing `open` first if
+/// `index` is out of bounds. `default_net`'s OS-assigned interface indices
+/// aren't small/contiguous, and `interfaces` can legitimately be populated
+/// (at startup, or by a background refresh) before `interfaces_open` has
+/// ever been sized to match - so every access goes through here rather
+/// than a raw `open[index]`, which would panic (and previously did) the
+/// moment those two ever got out of step.
+fn interface_open_state(open: &mut Vec<(bool, bool, bool)>, index: usize) -> &mut (bool, bool, bool) {
+    if index >= open.len() {
+        open.resize(index + 1, (false, false, false));
+    }
+    &mut open[index]
 }
 
 /// Renders a bits-per-second speed as e.g. "1Gbps" instead of a raw bit
