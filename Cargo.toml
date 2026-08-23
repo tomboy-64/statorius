@@ -1,6 +1,6 @@
 [package]
 name = "statorius"
-version = "0.6.0"
+version = "0.6.1"
 edition = "2024"
 license = "AGPL-3.0-only"
 
@@ -18,9 +18,9 @@ surge-ping = "0.9" # Async ICMP
 default-net = "0.22"
 # L2 capability probing now, raw Ethernet frame capture/injection later
 # (Npcap on Windows, libpcap on Linux)
-pcap = "2.4"
+pcap = "2.5.0"
 # Lets PingBackend be a plain `async fn`-based trait usable as `Box<dyn PingBackend>`
-async-trait = "0.1.91"
+async-trait = "0.1.92"
 # Raw Ethernet/VLAN/ARP/IPv4/ICMP frame construction+parsing for L2 pings.
 # Deliberately pnet_packet, NOT the full pnet crate: pnet also pulls in
 # pnet_datalink (its own native capture layer), which links Packet.lib on

@@ -374,9 +374,9 @@ checksum = "8b75356056920673b02621b35afd0f7dda9306d03c79a30f5c56c44cf256e3de"
 
 [[package]]
 name = "async-trait"
-version = "0.1.91"
+version = "0.1.92"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ae36dc4177970ef04fde5178d3e2429882def40e57a451f919c098f72baa6cec"
+checksum = "82f6aeea286b8eb4dd3431a1be1b59d290ace00f5bfd8e2a159bc2a05e2c1667"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2592,9 +2592,9 @@ checksum = "57c0d7b74b563b49d38dae00a0c37d4d6de9b432382b2892f0574ddcae73fd0a"
 
 [[package]]
 name = "pcap"
-version = "2.4.0"
+version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bbd2eecc2ddc671ec563b5b39f846556aade68a65d1afb14d8fe6b30b0457d75"
+checksum = "d033f537690268aafc38d7ecd5783dfc0a31ac5888da00014f887af16f312a51"
 dependencies = [
  "bitflags 1.3.2",
  "errno 0.2.8",
@@ -3374,7 +3374,7 @@ checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 
 [[package]]
 name = "statorius"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "async-trait",
  "default-net",
