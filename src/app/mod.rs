@@ -4,11 +4,13 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::net::dhcp_state::DhcpState;
 use crate::net::dns::{DnsCommand, SharedDnsServers};
+use crate::net::dns_query::{QueryOutcome, TraceOutcome};
 use crate::net::l2::L2Readiness;
 use crate::net::l2_ipc::L2DuplicateOutcomeWire;
 use crate::net::l2_manager::{L2Command, L2JobRequest, L2Status, SharedL2Status};
 use crate::net::l2_pinger::{L2PingerCommand, L2PingerState};
 use crate::state::{SharedState, WorkerCommand};
+use hickory_resolver::proto::rr::RecordType;
 
 mod about_tab;
 mod dhcp_tab;
@@ -103,17 +105,18 @@ pub struct StatoriusApp {
     dhcp_open: std::collections::HashMap<u32, bool>,
 
     /// The OS's currently-configured DNS servers, refreshed in the
-    /// background every 10s - read fresh every frame for the "DNS
-    /// Servers" tab, same as `l2_status`/`dhcp_state`. See `net::dns`.
+    /// background every 10s - read fresh every frame for the "DNS" tab,
+    /// same as `l2_status`/`dhcp_state`. See `net::dns`.
     dns_shared: SharedDnsServers,
-    /// Sends one-off `DnsCommand::Resolve` jobs to the background
-    /// `dns_worker` task - used by the Ping tab when Enter is pressed on
-    /// something that isn't already a literal IP address.
+    /// Sends one-off `DnsCommand::Resolve`/`Query`/`Trace` jobs to the
+    /// background `dns_worker` task - `Resolve` is used by the Ping tab
+    /// when Enter is pressed on something that isn't already a literal IP
+    /// address; `Query`/`Trace` by the DNS tab's own Query panel.
     dns_tx: mpsc::Sender<DnsCommand>,
-    /// Which of `dns_shared`'s servers are checked in the "DNS Servers"
-    /// tab, keyed by address so a selection survives the list being
-    /// refreshed out from under it. A server not yet in this map (just
-    /// discovered) defaults to checked/selected.
+    /// Which of `dns_shared`'s servers are checked in the "DNS" tab, keyed
+    /// by address so a selection survives the list being refreshed out
+    /// from under it. A server not yet in this map (just discovered)
+    /// defaults to checked/selected.
     dns_selected: std::collections::HashMap<std::net::IpAddr, bool>,
     /// The hostname lookup currently in flight for the Ping tab, if any -
     /// `Some` disables re-submitting until it resolves one way or the
@@ -127,13 +130,13 @@ pub struct StatoriusApp {
     /// for exactly as long as it still equals this, and clears back to
     /// normal the moment the user types anything else.
     dns_failed_for: Option<String>,
-    /// Servers added by hand on the DNS Servers tab (the "+" field), on top
-    /// of whatever `dns_shared` reports the OS has configured. Never
-    /// touched by the 10s background refresh - only removed by the user's
-    /// own "x" button, or implicitly by loading a `.dns` file that doesn't
-    /// mention them.
+    /// Servers added by hand on the DNS tab (the "+" field), on top of
+    /// whatever `dns_shared` reports the OS has configured. Never touched
+    /// by the 10s background refresh - only removed by the user's own "x"
+    /// button, or implicitly by loading a `.dns` file that doesn't mention
+    /// them.
     dns_manual_servers: Vec<std::net::IpAddr>,
-    /// Live text of the DNS Servers tab's "add a server" field.
+    /// Live text of the DNS tab's "add a server" field.
     dns_add_input: String,
     /// Set when `dns_add_input` didn't parse as an IP address; rendered in
     /// red under the add field, cleared on the next successful add.
@@ -148,6 +151,37 @@ pub struct StatoriusApp {
     /// Result of the last save/load attempt, shown under the 💾/📁 row
     /// until the next one replaces it - `(is_error, message)`.
     dns_io_message: Option<(bool, String)>,
+
+    // --- DNS tab: Query panel ---
+    /// Live text of the Query panel's "name" field.
+    dns_query_input: String,
+    /// Selected record type in the panel's dropdown.
+    dns_query_type: RecordType,
+    dns_query_use_tcp: bool,
+    dns_query_recursion_desired: bool,
+    dns_query_dnssec_ok: bool,
+    dns_query_checking_disabled: bool,
+    /// dig's `+trace` - see `dns_query::trace` for what this changes about
+    /// where the query actually goes.
+    dns_query_trace: bool,
+    /// `Some` while a plain (non-trace) query is in flight - only one of
+    /// this and `dns_trace_rx` is ever `Some` at a time, same pattern as
+    /// `dns_save_input`/`dns_load_input` above.
+    dns_query_rx: Option<oneshot::Receiver<Vec<QueryOutcome>>>,
+    /// `Some` while a `+trace` job is in flight.
+    dns_trace_rx: Option<oneshot::Receiver<TraceOutcome>>,
+    /// The last completed (non-trace) query's per-server results -
+    /// replaced each time a new one finishes; `None` until the first one
+    /// does.
+    dns_query_results: Option<Vec<QueryOutcome>>,
+    /// The last completed `+trace`'s hops - same idea, for trace jobs.
+    dns_trace_result: Option<TraceOutcome>,
+    /// Set when the Query panel couldn't even submit a job (an empty name
+    /// field, no servers checked for a non-trace query, or a full command
+    /// channel) - shown in red under the option row. Per-server/per-hop
+    /// failures of a job that *did* submit are shown inline with that
+    /// server/hop instead, not here.
+    dns_query_error: Option<String>,
 
     /// `Some(filename-in-progress)` while the Ping tab's "save as" field is
     /// open for the target list; `None` otherwise. Only one of this and
@@ -224,6 +258,18 @@ impl StatoriusApp {
             dns_save_input: None,
             dns_load_input: None,
             dns_io_message: None,
+            dns_query_input: String::new(),
+            dns_query_type: RecordType::A,
+            dns_query_use_tcp: false,
+            dns_query_recursion_desired: true,
+            dns_query_dnssec_ok: false,
+            dns_query_checking_disabled: false,
+            dns_query_trace: false,
+            dns_query_rx: None,
+            dns_trace_rx: None,
+            dns_query_results: None,
+            dns_trace_result: None,
+            dns_query_error: None,
             ping_list_save_input: None,
             ping_list_load_input: None,
             ping_list_io_message: None,
@@ -344,7 +390,7 @@ fn render_tab_bar(
         // Also just a local read (resolv.conf / the registry) - no
         // privileges needed, never disabled.
         if ui
-            .selectable_label(*active_tab == ActiveTab::Dns, "DNS Servers")
+            .selectable_label(*active_tab == ActiveTab::Dns, "DNS")
             .clicked()
         {
             *active_tab = ActiveTab::Dns;

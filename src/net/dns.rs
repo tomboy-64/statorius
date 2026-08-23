@@ -1,25 +1,34 @@
 //! System DNS server discovery, plus name resolution against a
 //! user-chosen subset of those servers.
 //!
-//! Two independent things live here, mirroring `dhcp_state`/`l2_manager`'s
+//! Three independent things live here, mirroring `dhcp_state`/`l2_manager`'s
 //! shared-state shape:
 //! - a background task that re-lists the OS's configured DNS servers every
 //!   `REFRESH_INTERVAL` and publishes them via `SharedDnsServers` (read by
-//!   the "DNS Servers" tab every frame - no channel involved, same as
+//!   the "DNS" tab every frame - no channel involved, same as
 //!   `SharedL2Status`);
 //! - an on-demand resolver: the Ping tab sends a `DnsCommand::Resolve` job
 //!   over this module's command channel, this task resolves it against
 //!   whichever servers the user checked, and replies on the included
-//!   oneshot channel.
+//!   oneshot channel;
+//! - the DNS tab's own Query panel: `DnsCommand::Query` (a normal query,
+//!   fanned out to every checked server) and `DnsCommand::Trace` (dig's
+//!   `+trace`) - both spawned rather than awaited inline here, since
+//!   unlike a single `Resolve`, either can take several seconds (several
+//!   servers/hops, each with its own timeout) and shouldn't stall the 10s
+//!   refresh tick or a concurrent request while they run. See
+//!   `dns_query` for how they're actually built and sent.
 //!
-//! Listing the system's servers and doing the actual lookups both go
+//! Listing the system's servers and doing `Resolve` lookups both go
 //! through `hickory_resolver`: `system_conf::read_system_conf()` already
 //! knows how to read `/etc/resolv.conf` on Linux and the registry on
 //! Windows, and the resolver itself already follows CNAME chains as part
 //! of a normal A/AAAA lookup - neither needs bespoke platform code here.
-//! DNSSEC is never requested or validated (that's `ResolverOpts`'s
-//! default, and this module never turns it on), so "ignore DNSSEC" needs
-//! no special handling either.
+//! DNSSEC is never requested or validated for a `Resolve` (that's
+//! `ResolverOpts`'s default, and this module never turns it on) - `Query`
+//! and `Trace` are a separate, lower-level path specifically so DNSSEC
+//! (among other things) can be requested and shown on demand instead; see
+//! `dns_query`'s module docs for why full validation isn't part of that.
 
 use std::collections::HashSet;
 use std::net::IpAddr;
@@ -28,22 +37,48 @@ use std::time::Duration;
 
 use hickory_resolver::config::{LookupIpStrategy, NameServerConfig, ResolverConfig};
 use hickory_resolver::net::runtime::TokioRuntimeProvider;
+use hickory_resolver::proto::rr::RecordType;
 use hickory_resolver::system_conf::read_system_conf;
 use hickory_resolver::TokioResolver;
 use tokio::sync::{mpsc, oneshot};
 
+use super::dns_query::{self, QueryOptions, QueryOutcome, TraceOutcome};
+
 /// How often the background task re-lists the OS's configured DNS servers.
 const REFRESH_INTERVAL: Duration = Duration::from_secs(10);
 
-/// One request the Ping tab can send to `dns_worker`.
+/// One request the UI can send to `dns_worker`.
 pub enum DnsCommand {
     /// Resolve `name` against exactly `servers` (whichever the user
-    /// checked in the DNS Servers tab) - both A and AAAA, in parallel,
-    /// merging whatever succeeds.
+    /// checked in the DNS tab) - both A and AAAA, in parallel, merging
+    /// whatever succeeds. Used by the Ping tab.
     Resolve {
         name: String,
         servers: Vec<IpAddr>,
         respond_to: oneshot::Sender<Result<Vec<IpAddr>, String>>,
+    },
+
+    /// One dig-like query for `name`/`options.record_type`, sent to every
+    /// one of `servers` in parallel. Used by the DNS tab's Query panel
+    /// when `+trace` isn't checked.
+    Query {
+        name: String,
+        servers: Vec<IpAddr>,
+        options: QueryOptions,
+        respond_to: oneshot::Sender<Vec<QueryOutcome>>,
+    },
+
+    /// `+trace`: walks the delegation chain by hand, starting at the root
+    /// hints - see `dns_query::trace` for why that's independent of
+    /// whichever servers are checked on the DNS tab. `fallback_servers` is
+    /// only used if a referral is missing glue and an NS name needs an
+    /// ordinary recursive lookup to get an address.
+    Trace {
+        name: String,
+        record_type: RecordType,
+        dnssec_ok: bool,
+        fallback_servers: Vec<IpAddr>,
+        respond_to: oneshot::Sender<TraceOutcome>,
     },
 }
 
@@ -82,8 +117,8 @@ impl Default for SharedDnsServers {
 /// order preserved. Cheap enough to call on every refresh tick: this only
 /// re-reads local configuration, no network I/O. An unreadable/unparsable
 /// configuration is treated as "no servers" rather than an error the UI
-/// has to do anything special with - the DNS Servers tab just shows an
-/// empty list, and resolution then fails the same way it would with none
+/// has to do anything special with - the DNS tab just shows an empty
+/// list, and resolution then fails the same way it would with none
 /// selected.
 fn list_system_dns_servers() -> Vec<IpAddr> {
     let Ok((config, _opts)) = read_system_conf() else {
@@ -119,6 +154,20 @@ pub async fn dns_worker(mut rx: mpsc::Receiver<DnsCommand>, shared: SharedDnsSer
                     DnsCommand::Resolve { name, servers, respond_to } => {
                         let outcome = resolve(&name, &servers).await;
                         let _ = respond_to.send(outcome);
+                    }
+                    DnsCommand::Query { name, servers, options, respond_to } => {
+                        // Spawned - see the module docs above for why.
+                        tokio::spawn(async move {
+                            let outcomes = dns_query::query_all(&name, &servers, options).await;
+                            let _ = respond_to.send(outcomes);
+                        });
+                    }
+                    DnsCommand::Trace { name, record_type, dnssec_ok, fallback_servers, respond_to } => {
+                        tokio::spawn(async move {
+                            let outcome =
+                                dns_query::trace(&name, record_type, dnssec_ok, &fallback_servers).await;
+                            let _ = respond_to.send(outcome);
+                        });
                     }
                 }
             }
