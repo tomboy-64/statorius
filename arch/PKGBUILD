@@ -1,7 +1,7 @@
 # Maintainer: Your Name <your.email@example.com>
 _pkgname=statorius
 pkgname=${_pkgname}-git
-pkgver=r0.g0000000
+pkgver=0.6.0.r2.g92f4422
 pkgrel=1
 pkgdesc="A networking toolkit (development build)"
 arch=('x86_64')
