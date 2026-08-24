@@ -15,6 +15,13 @@ use super::{PingMethodChoice, StatoriusApp};
 /// into thousands of continuous pingers from a typo'd prefix length.
 const MAX_SWEEP_HOSTS: u64 = 512;
 
+/// Port a UDP ping uses when the Port field is left empty at submit time -
+/// DNS, since it's the most common thing worth a quick "is this open"
+/// UDP check. TCP has no equivalent default; a fixed port there would be
+/// far more likely to silently probe the wrong service than to guess
+/// right, so it's left as a required field instead.
+const DEFAULT_UDP_PORT: u16 = 53;
+
 /// Line ending used when *writing* a `.ips` file - matches the platform's
 /// own convention (Notepad and friends still care on Windows). Reading
 /// never needs the counterpart of this: `str::lines()` already treats a
@@ -54,8 +61,10 @@ pub(super) struct PingListLoadState {
 
 impl StatoriusApp {
     /// Builds a `PingMethod` from the Method selector and its associated
-    /// port/size field, exactly as currently typed - `Err` if that field
-    /// doesn't parse (an empty or non-numeric port/size).
+    /// port/size field, exactly as currently typed. An empty port defaults
+    /// to `DEFAULT_UDP_PORT` for UDP; TCP has no such default and errors
+    /// instead, same as an empty/non-numeric payload size or TCP port
+    /// always has.
     fn current_ping_method(&self) -> Result<PingMethod, String> {
         match self.ping_method_choice {
             PingMethodChoice::Icmp => {
@@ -68,16 +77,21 @@ impl StatoriusApp {
                 };
                 Ok(PingMethod::Icmp { payload_size })
             }
-            PingMethodChoice::Tcp | PingMethodChoice::Udp => {
+            PingMethodChoice::Tcp => {
                 let text = self.ping_port_input.trim();
                 let port: u16 = text
                     .parse()
                     .map_err(|_| format!("'{text}' isn't a valid port number"))?;
-                Ok(if self.ping_method_choice == PingMethodChoice::Tcp {
-                    PingMethod::Tcp { port }
+                Ok(PingMethod::Tcp { port })
+            }
+            PingMethodChoice::Udp => {
+                let text = self.ping_port_input.trim();
+                let port: u16 = if text.is_empty() {
+                    DEFAULT_UDP_PORT
                 } else {
-                    PingMethod::Udp { port }
-                })
+                    text.parse().map_err(|_| format!("'{text}' isn't a valid port number"))?
+                };
+                Ok(PingMethod::Udp { port })
             }
         }
     }
@@ -497,13 +511,23 @@ impl StatoriusApp {
                          the path.",
                         );
                 }
-                PingMethodChoice::Tcp | PingMethodChoice::Udp => {
+                PingMethodChoice::Tcp => {
                     ui.label("Port:");
                     ui.add(
                         egui::TextEdit::singleline(&mut self.ping_port_input)
                             .desired_width(50.0)
-                            .hint_text("443"),
-                    );
+                            .hint_text("e.g. 443"),
+                    )
+                        .on_hover_text("Required - there's no default TCP port.");
+                }
+                PingMethodChoice::Udp => {
+                    ui.label("Port:");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.ping_port_input)
+                            .desired_width(50.0)
+                            .hint_text(DEFAULT_UDP_PORT.to_string()),
+                    )
+                        .on_hover_text(format!("Defaults to {DEFAULT_UDP_PORT} (DNS) if left empty."));
                 }
             }
 
