@@ -35,8 +35,34 @@ enum ActiveTab {
     About,
 }
 
+/// The Ping tab's "Method" selector for *new* targets - a UI-only concept
+/// distinct from `state::PingMethod`, which is what actually gets sent once
+/// this (plus whatever's in the port/size field) is resolved into one. Each
+/// already-running target keeps its own `PingMethod` regardless of what this
+/// is currently set to - see `ping_tab::current_ping_method`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PingMethodChoice {
+    Icmp,
+    Tcp,
+    Udp,
+}
+
 pub struct StatoriusApp {
     target_input: String,
+    /// Method selector for the *next* submission from `target_input` -
+    /// see `PingMethodChoice`.
+    ping_method_choice: PingMethodChoice,
+    /// Shared text field for the port, when `ping_method_choice` is TCP or
+    /// UDP - one field reused for both rather than two, since only one is
+    /// ever shown at a time.
+    ping_port_input: String,
+    /// ICMP payload size in bytes, when `ping_method_choice` is ICMP.
+    /// Defaults to `state::DEFAULT_ICMP_PAYLOAD_SIZE` as text.
+    ping_icmp_size_input: String,
+    /// Stop automatically after this many attempts - empty means
+    /// unlimited (`PingRequest::count: None`), matching the behavior from
+    /// before this field existed.
+    ping_count_input: String,
     tx: mpsc::Sender<WorkerCommand>,
     state: SharedState,
     last_error: Option<String>,
@@ -221,6 +247,10 @@ impl StatoriusApp {
     ) -> Self {
         Self {
             target_input: String::new(),
+            ping_method_choice: PingMethodChoice::Icmp,
+            ping_port_input: String::new(),
+            ping_icmp_size_input: crate::state::DEFAULT_ICMP_PAYLOAD_SIZE.to_string(),
+            ping_count_input: String::new(),
             tx,
             state,
             last_error: None,

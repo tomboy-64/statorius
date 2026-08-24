@@ -7,10 +7,23 @@ use std::time::{Duration, Instant};
 /// and the hover tooltip.
 pub const HISTORY_LEN: usize = 15;
 
-#[derive(Debug, Clone)]
+/// ICMP payload size used when a target doesn't specify its own - matches
+/// classic `ping`'s traditional default (56 bytes of data, 64 with the ICMP
+/// header) rather than anything this app picked arbitrarily.
+pub const DEFAULT_ICMP_PAYLOAD_SIZE: usize = 56;
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum PingMethod {
-    Icmp,
+    /// `payload_size` is exposed (rather than fixed) so a target can be
+    /// pinged with an oversized payload to probe for fragmentation/MTU
+    /// issues along the path - see `backend::IcmpSocketBackend`.
+    Icmp { payload_size: usize },
     Tcp { port: u16 },
+    /// A "null" UDP probe: an empty datagram, success/failure read from
+    /// whatever comes back (a reply, an ICMP Port Unreachable surfaced as a
+    /// socket error, or silence) - see `backend::UdpProbeBackend` for why
+    /// silence is reported as `Timeout` rather than a positive result.
+    Udp { port: u16 },
 }
 
 #[derive(Debug, Clone)]
@@ -18,6 +31,10 @@ pub struct PingRequest {
     pub target: IpAddr,
     pub method: PingMethod,
     pub source_ip: Option<IpAddr>,
+    /// Stop automatically once this many attempts have completed - `None`
+    /// runs until manually stopped (the only behavior before this field
+    /// existed, and still the default from the UI).
+    pub count: Option<u32>,
 }
 
 #[derive(Debug, Clone)]
@@ -54,12 +71,19 @@ pub struct PingEntry {
     /// Most recent samples, oldest at the front, newest at the back, capped at
     /// `HISTORY_LEN`. `None` marks a failed/timed-out/errored attempt.
     pub history: VecDeque<Option<Duration>>,
-    /// Whether the continuous ping loop for this target is currently active.
+    /// Whether the continuous ping loop for this target is currently active -
+    /// `false` both when the user paused it and when it ran out its `count`
+    /// on its own; either way, resuming starts a fresh `count`-sized run.
     pub running: bool,
+    /// Stop automatically once this many attempts have completed since the
+    /// most recent start/resume - `None` runs until stopped by hand. Kept on
+    /// the entry (not just the request) so the ▶ resume button restarts with
+    /// the same count instead of reverting to "unlimited".
+    pub count: Option<u32>,
 }
 
 impl PingEntry {
-    fn new(target: IpAddr, method: PingMethod) -> Self {
+    fn new(target: IpAddr, method: PingMethod, count: Option<u32>) -> Self {
         Self {
             target,
             method,
@@ -69,6 +93,7 @@ impl PingEntry {
             successes: 0,
             history: VecDeque::with_capacity(HISTORY_LEN),
             running: true,
+            count,
         }
     }
 
@@ -105,18 +130,18 @@ impl SharedState {
     /// Called when a target is (re)started, so it shows up in the UI - as
     /// "pending" the first time, unchanged if it already existed - even before
     /// the next result comes back.
-    pub fn ensure_target(&self, target: IpAddr, method: PingMethod) {
+    pub fn ensure_target(&self, target: IpAddr, method: PingMethod, count: Option<u32>) {
         let mut map = self.inner.lock().unwrap();
-        map.entry(target).or_insert_with(|| PingEntry::new(target, method));
+        map.entry(target).or_insert_with(|| PingEntry::new(target, method, count));
     }
 
     /// Record the outcome of one ping attempt against `target`, pushing it into
     /// the rolling history (dropping the oldest sample once it's full).
     pub fn record_result(&self, target: IpAddr, result: PingResult) {
         let mut map = self.inner.lock().unwrap();
-        let entry = map
-            .entry(target)
-            .or_insert_with(|| PingEntry::new(target, PingMethod::Icmp));
+        let entry = map.entry(target).or_insert_with(|| {
+            PingEntry::new(target, PingMethod::Icmp { payload_size: DEFAULT_ICMP_PAYLOAD_SIZE }, None)
+        });
 
         entry.attempts += 1;
         let sample = if let PingResult::Success(d) = &result {

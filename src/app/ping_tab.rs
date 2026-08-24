@@ -1,14 +1,19 @@
 use std::collections::VecDeque;
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv4Addr};
 use std::path::PathBuf;
 use eframe::egui;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::net::dns::DnsCommand;
-use crate::state::{PingEntry, PingMethod, PingRequest, WorkerCommand};
+use crate::state::{PingEntry, PingMethod, PingRequest, WorkerCommand, DEFAULT_ICMP_PAYLOAD_SIZE};
 
 use super::widgets::{render_average_indicator, render_last_indicator, render_since_indicator};
-use super::StatoriusApp;
+use super::{PingMethodChoice, StatoriusApp};
+
+/// Sweeping a subnet larger than this via `a.b.c.d/n` in the target box is
+/// refused outright (with a specific error) rather than silently expanding
+/// into thousands of continuous pingers from a typo'd prefix length.
+const MAX_SWEEP_HOSTS: u64 = 512;
 
 /// Line ending used when *writing* a `.ips` file - matches the platform's
 /// own convention (Notepad and friends still care on Windows). Reading
@@ -48,16 +53,63 @@ pub(super) struct PingListLoadState {
 }
 
 impl StatoriusApp {
+    /// Builds a `PingMethod` from the Method selector and its associated
+    /// port/size field, exactly as currently typed - `Err` if that field
+    /// doesn't parse (an empty or non-numeric port/size).
+    fn current_ping_method(&self) -> Result<PingMethod, String> {
+        match self.ping_method_choice {
+            PingMethodChoice::Icmp => {
+                let text = self.ping_icmp_size_input.trim();
+                let payload_size: usize = if text.is_empty() {
+                    DEFAULT_ICMP_PAYLOAD_SIZE
+                } else {
+                    text.parse()
+                        .map_err(|_| format!("'{text}' isn't a valid ICMP payload size"))?
+                };
+                Ok(PingMethod::Icmp { payload_size })
+            }
+            PingMethodChoice::Tcp | PingMethodChoice::Udp => {
+                let text = self.ping_port_input.trim();
+                let port: u16 = text
+                    .parse()
+                    .map_err(|_| format!("'{text}' isn't a valid port number"))?;
+                Ok(if self.ping_method_choice == PingMethodChoice::Tcp {
+                    PingMethod::Tcp { port }
+                } else {
+                    PingMethod::Udp { port }
+                })
+            }
+        }
+    }
+
+    /// Parses the Count field - empty means unlimited (`None`), matching
+    /// the only behavior that existed before this field did.
+    fn current_ping_count(&self) -> Result<Option<u32>, String> {
+        let text = self.ping_count_input.trim();
+        if text.is_empty() {
+            return Ok(None);
+        }
+        let count: u32 =
+            text.parse().map_err(|_| format!("'{text}' isn't a valid ping count"))?;
+        if count == 0 {
+            return Err("Count must be at least 1".to_owned());
+        }
+        Ok(Some(count))
+    }
+
     /// Starts (or restarts) continuous pinging of whatever is currently
-    /// typed into the input box. Literal IPs are started immediately - and
-    /// that includes a comma-separated list of them, which is exactly what
-    /// a multi-address DNS resolution below leaves in the box, so every
-    /// resolved address actually gets used on the follow-up submit rather
-    /// than just the first one. If the input isn't (entirely) literal IPs,
-    /// it's tried as a single hostname instead: a background DNS lookup is
-    /// kicked off (see `poll_dns_resolution`) rather than pinging anything
-    /// yet - the resolved address(es) replace the input, and the user
-    /// submits again to actually start the ping(s).
+    /// typed into the input box, using the Method/port-or-size/Count fields
+    /// alongside it. Each comma-separated part is expanded on its own: a
+    /// literal IP starts immediately, a CIDR range (`a.b.c.d/n`) expands
+    /// into every host address in it and starts all of them, and anything
+    /// that looks like neither falls back to the whole input being tried as
+    /// a single hostname - a background DNS lookup is kicked off (see
+    /// `poll_dns_resolution`) rather than pinging anything yet, the
+    /// resolved address(es) replace the input, and the user submits again
+    /// to actually start the ping(s). (Mixing a hostname with literal
+    /// IPs/CIDRs in the same submission isn't supported, same as before
+    /// CIDR expansion existed - the whole input either is entirely
+    /// IP/CIDR-shaped, or is tried as one hostname.)
     fn submit_ping_target(&mut self) {
         let trimmed = self.target_input.trim().to_owned();
 
@@ -66,58 +118,77 @@ impl StatoriusApp {
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .collect();
-        let literal_ips: Result<Vec<IpAddr>, _> =
-            parts.iter().map(|p| p.parse::<IpAddr>()).collect();
+        let expanded: Vec<Option<Result<Vec<IpAddr>, String>>> =
+            parts.iter().map(|p| expand_target_part(p)).collect();
 
-        match literal_ips {
-            Ok(targets) if !targets.is_empty() => {
-                self.last_error = None;
-                self.dns_failed_for = None;
-                let mut failures = Vec::new();
-                for target in targets {
-                    let request = PingRequest {
-                        target,
-                        method: PingMethod::Icmp,
-                        source_ip: None,
-                    };
-                    if let Err(e) = self.tx.try_send(WorkerCommand::Start(request)) {
-                        failures.push(format!("{target}: {e}"));
+        if !expanded.is_empty() && expanded.iter().all(Option::is_some) {
+            // Every part at least looks like a literal IP or a CIDR range -
+            // resolve them all locally, no DNS needed.
+            let mut targets = Vec::new();
+            for outcome in expanded.into_iter().flatten() {
+                match outcome {
+                    Ok(addrs) => targets.extend(addrs),
+                    Err(e) => {
+                        self.last_error = Some(e);
+                        return;
                     }
                 }
-                if !failures.is_empty() {
-                    self.last_error = Some(format!("Failed to queue: {}", failures.join("; ")));
-                }
             }
-            _ => {
-                // Not (all) literal IPs - try it as a hostname. A lookup
-                // already in flight for a previous entry gets to finish
-                // first; re-pressing Enter/Ping while waiting is a no-op
-                // rather than firing off a second, overlapping request.
-                if self.dns_resolve_rx.is_some() {
+
+            let method = match self.current_ping_method() {
+                Ok(m) => m,
+                Err(e) => {
+                    self.last_error = Some(e);
                     return;
                 }
-                self.last_error = None;
+            };
+            let count = match self.current_ping_count() {
+                Ok(c) => c,
+                Err(e) => {
+                    self.last_error = Some(e);
+                    return;
+                }
+            };
 
-                let servers: Vec<IpAddr> = self
-                    .dns_shared
-                    .get()
-                    .into_iter()
-                    .filter(|ip| *self.dns_selected.get(ip).unwrap_or(&true))
-                    .collect();
-
-                let (respond_to, rx) = oneshot::channel();
-                let command = DnsCommand::Resolve {
-                    name: trimmed.clone(),
-                    servers,
-                    respond_to,
-                };
-                if self.dns_tx.try_send(command).is_ok() {
-                    self.dns_resolve_rx = Some(rx);
-                    self.dns_resolve_target = trimmed;
-                } else {
-                    self.dns_failed_for = Some(trimmed);
+            self.last_error = None;
+            self.dns_failed_for = None;
+            let mut failures = Vec::new();
+            for target in targets {
+                let request =
+                    PingRequest { target, method: method.clone(), source_ip: None, count };
+                if let Err(e) = self.tx.try_send(WorkerCommand::Start(request)) {
+                    failures.push(format!("{target}: {e}"));
                 }
             }
+            if !failures.is_empty() {
+                self.last_error = Some(format!("Failed to queue: {}", failures.join("; ")));
+            }
+            return;
+        }
+
+        // Not (all) literal IPs/CIDRs - try the whole input as a hostname.
+        // A lookup already in flight for a previous entry gets to finish
+        // first; re-pressing Enter/Ping while waiting is a no-op rather
+        // than firing off a second, overlapping request.
+        if self.dns_resolve_rx.is_some() {
+            return;
+        }
+        self.last_error = None;
+
+        let servers: Vec<IpAddr> = self
+            .dns_shared
+            .get()
+            .into_iter()
+            .filter(|ip| *self.dns_selected.get(ip).unwrap_or(&true))
+            .collect();
+
+        let (respond_to, rx) = oneshot::channel();
+        let command = DnsCommand::Resolve { name: trimmed.clone(), servers, respond_to };
+        if self.dns_tx.try_send(command).is_ok() {
+            self.dns_resolve_rx = Some(rx);
+            self.dns_resolve_target = trimmed;
+        } else {
+            self.dns_failed_for = Some(trimmed);
         }
     }
 
@@ -317,8 +388,9 @@ impl StatoriusApp {
             for target in &load.resolved {
                 let request = PingRequest {
                     target: *target,
-                    method: PingMethod::Icmp,
+                    method: PingMethod::Icmp { payload_size: DEFAULT_ICMP_PAYLOAD_SIZE },
                     source_ip: None,
+                    count: None,
                 };
                 if let Err(e) = self.tx.try_send(WorkerCommand::Start(request)) {
                     failures.push(format!("{target}: {e}"));
@@ -395,6 +467,55 @@ impl StatoriusApp {
                     self.ping_list_load_input = Some(String::new());
                 }
             });
+        });
+
+        ui.horizontal(|ui| {
+            ui.label("Method:");
+            egui::ComboBox::from_id_salt("ping_method_choice")
+                .selected_text(match self.ping_method_choice {
+                    PingMethodChoice::Icmp => "ICMP",
+                    PingMethodChoice::Tcp => "TCP",
+                    PingMethodChoice::Udp => "UDP",
+                })
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut self.ping_method_choice, PingMethodChoice::Icmp, "ICMP");
+                    ui.selectable_value(&mut self.ping_method_choice, PingMethodChoice::Tcp, "TCP");
+                    ui.selectable_value(&mut self.ping_method_choice, PingMethodChoice::Udp, "UDP");
+                });
+
+            match self.ping_method_choice {
+                PingMethodChoice::Icmp => {
+                    ui.label("Payload size:");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.ping_icmp_size_input)
+                            .desired_width(50.0)
+                            .hint_text(DEFAULT_ICMP_PAYLOAD_SIZE.to_string()),
+                    )
+                        .on_hover_text(
+                            "Bytes of ICMP payload per echo request - the default matches classic \
+                         `ping`. A larger size can help surface fragmentation/MTU issues along \
+                         the path.",
+                        );
+                }
+                PingMethodChoice::Tcp | PingMethodChoice::Udp => {
+                    ui.label("Port:");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.ping_port_input)
+                            .desired_width(50.0)
+                            .hint_text("443"),
+                    );
+                }
+            }
+
+            ui.label("Count:");
+            ui.add(
+                egui::TextEdit::singleline(&mut self.ping_count_input)
+                    .desired_width(40.0)
+                    .hint_text("\u{221e}"), // ∞
+            )
+                .on_hover_text("Stop automatically after this many attempts. Empty = unlimited.");
+
+            ui.label("Target box also takes a subnet, e.g. 192.168.1.0/24");
         });
 
         if let Some(err) = &self.last_error {
@@ -555,6 +676,7 @@ fn render_controls(ui: &mut egui::Ui, entry: &PingEntry, tx: &mpsc::Sender<Worke
                     target: entry.target,
                     method: entry.method.clone(),
                     source_ip: None,
+                    count: entry.count,
                 };
                 let _ = tx.try_send(WorkerCommand::Start(request));
             }
@@ -585,4 +707,67 @@ fn ping_list_file_path(filename: &str) -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
     let dir = exe.parent()?;
     Some(dir.join(filename))
+}
+
+/// One comma-separated part of the target box, expanded into its literal
+/// address(es) - a single IP, or every host address in a CIDR range.
+/// Returns `None` (not `Err`) for anything that isn't IP/CIDR shaped at
+/// all, since that's `submit_ping_target`'s cue to fall back to DNS
+/// resolution instead of treating this as a mistyped range - only a part
+/// that clearly *looks* like a CIDR but is malformed or too large produces
+/// an actual error, since silently trying to resolve "10.0.0.0/33" as a
+/// hostname would be a worse experience than saying why it didn't work.
+fn expand_target_part(part: &str) -> Option<Result<Vec<IpAddr>, String>> {
+    if let Ok(ip) = part.parse::<IpAddr>() {
+        return Some(Ok(vec![ip]));
+    }
+    let (base, len) = part.split_once('/')?;
+    let Ok(base_ip) = base.trim().parse::<IpAddr>() else {
+        return None; // doesn't look like a CIDR after all
+    };
+    let Ok(prefix_len) = len.trim().parse::<u8>() else {
+        return Some(Err(format!("'{part}': invalid prefix length")));
+    };
+    Some(expand_cidr(base_ip, prefix_len))
+}
+
+fn expand_cidr(base: IpAddr, prefix_len: u8) -> Result<Vec<IpAddr>, String> {
+    match base {
+        IpAddr::V4(v4) => expand_cidr_v4(v4, prefix_len),
+        IpAddr::V6(_) => {
+            Err("IPv6 CIDR sweeps aren't supported - the ranges are far too large to \
+                 enumerate. Ping the addresses individually instead."
+                .to_owned())
+        }
+    }
+}
+
+/// Expands an IPv4 CIDR range into its individual host addresses, excluding
+/// the network/broadcast addresses (except for a /31, RFC 3021, where both
+/// addresses are point-to-point-usable, and a /32, which is just the one
+/// address).
+fn expand_cidr_v4(base: Ipv4Addr, prefix_len: u8) -> Result<Vec<IpAddr>, String> {
+    if prefix_len > 32 {
+        return Err(format!("'/{prefix_len}' isn't a valid IPv4 prefix length"));
+    }
+    let host_bits = 32 - u32::from(prefix_len);
+    let total_addresses: u64 = 1u64 << host_bits;
+    if total_addresses > MAX_SWEEP_HOSTS {
+        return Err(format!(
+            "That range has too many addresses to sweep at once (limit: {MAX_SWEEP_HOSTS} \
+             hosts) - use a smaller subnet, or ping specific addresses individually"
+        ));
+    }
+
+    let base_u32 = u32::from(base);
+    let mask: u32 = if host_bits >= 32 { 0 } else { !0u32 << host_bits };
+    let network = base_u32 & mask;
+    let broadcast = network | !mask;
+
+    let addrs: Vec<IpAddr> = match host_bits {
+        0 => vec![IpAddr::V4(Ipv4Addr::from(network))],
+        1 => (network..=broadcast).map(|a| IpAddr::V4(Ipv4Addr::from(a))).collect(),
+        _ => ((network + 1)..broadcast).map(|a| IpAddr::V4(Ipv4Addr::from(a))).collect(),
+    };
+    Ok(addrs)
 }

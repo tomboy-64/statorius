@@ -2,8 +2,8 @@ mod backend;
 pub(crate) mod dhcp;
 mod dhcp_sniffer;
 pub(crate) mod dhcp_state;
-pub(crate) mod dns_query;
 pub(crate) mod dns;
+pub(crate) mod dns_query;
 mod l2_engine;
 mod l2_frame;
 pub(crate) mod l2_helper;
@@ -23,7 +23,7 @@ use surge_ping::{Client, Config, PingIdentifier, ICMP};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
-use backend::{IcmpSocketBackend, PingBackend, TcpConnectBackend};
+use backend::{IcmpSocketBackend, PingBackend, TcpConnectBackend, UdpProbeBackend};
 use crate::state::{PingMethod, PingResult, SharedState, WorkerCommand};
 
 /// Delay between successive pings to the same target once its continuous loop
@@ -86,7 +86,7 @@ pub async fn ping_worker(mut rx: mpsc::Receiver<WorkerCommand>, state: SharedSta
                     let _ = old.task.await;
                 }
 
-                state.ensure_target(target, request.method.clone());
+                state.ensure_target(target, request.method.clone(), request.count);
                 state.set_running(target, true);
 
                 let ident = next_ident;
@@ -97,10 +97,11 @@ pub async fn ping_worker(mut rx: mpsc::Receiver<WorkerCommand>, state: SharedSta
                 // a future raw-L2 method would add one match arm here and
                 // nothing else in this file would need to change).
                 let backend: Box<dyn PingBackend> = match &request.method {
-                    PingMethod::Icmp => {
+                    PingMethod::Icmp { payload_size } => {
                         match IcmpSocketBackend::new(
                             target,
                             PingIdentifier(ident),
+                            *payload_size,
                             &client_v4,
                             client_v6.as_deref(),
                         )
@@ -115,14 +116,16 @@ pub async fn ping_worker(mut rx: mpsc::Receiver<WorkerCommand>, state: SharedSta
                         }
                     }
                     PingMethod::Tcp { port } => Box::new(TcpConnectBackend::new(*port)),
+                    PingMethod::Udp { port } => Box::new(UdpProbeBackend::new(*port)),
                 };
 
                 let stop_flag = Arc::new(AtomicBool::new(false));
                 let task_stop_flag = stop_flag.clone();
                 let task_state = state.clone();
+                let count = request.count;
 
                 let task = tokio::spawn(async move {
-                    run_continuous_ping(target, backend, task_state, task_stop_flag).await;
+                    run_continuous_ping(target, backend, task_state, task_stop_flag, count).await;
                 });
 
                 handles.insert(target, TargetHandle { stop_flag, task });
@@ -151,17 +154,20 @@ pub async fn ping_worker(mut rx: mpsc::Receiver<WorkerCommand>, state: SharedSta
     }
 }
 
-/// Runs one target's continuous ping loop until `stop_flag` is raised: ping,
+/// Runs one target's continuous ping loop until `stop_flag` is raised, or
+/// (if `count` is `Some`) until that many attempts have completed - ping,
 /// record the result, wait out `PING_INTERVAL` (checking `stop_flag`
 /// periodically), repeat. Entirely backend-agnostic - it doesn't know or care
-/// whether `backend` is today's ICMP/TCP socket or a future raw-L2 impl.
+/// whether `backend` is today's ICMP/TCP/UDP socket or a future raw-L2 impl.
 async fn run_continuous_ping(
     target: IpAddr,
     mut backend: Box<dyn PingBackend>,
     state: SharedState,
     stop_flag: Arc<AtomicBool>,
+    count: Option<u32>,
 ) {
     let mut seq: u16 = 0;
+    let mut completed: u32 = 0;
 
     while !stop_flag.load(Ordering::Relaxed) {
         let result = backend.ping_once(target, seq).await;
@@ -173,6 +179,15 @@ async fn run_continuous_ping(
             break;
         }
         state.record_result(target, result);
+        completed += 1;
+
+        if count.is_some_and(|limit| completed >= limit) {
+            // Ran out its count on its own, same end state as a manual
+            // Stop - the ▶ button resumes it for another `count`-sized run
+            // rather than defaulting back to unlimited (see `PingEntry`).
+            state.set_running(target, false);
+            break;
+        }
 
         interruptible_sleep(PING_INTERVAL, &stop_flag).await;
     }
