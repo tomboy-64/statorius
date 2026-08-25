@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+#
+# Pre-commit hook: keeps arch/PKGBUILD's pkgver in sync with Cargo.toml's
+# [package] version. Cargo.toml is the authoritative source - if PKGBUILD
+# has drifted, this rewrites its pkgver (and resets pkgrel to 1, per Arch
+# packaging convention: pkgrel only climbs for packaging-only changes at
+# the same upstream version) and re-stages the file, so the fix rides
+# along in the commit you're already making rather than needing a
+# separate one.
+#
+# Install (once per clone): git config core.hooksPath .githooks
+# This file lives under .githooks/ (tracked by git) rather than
+# .git/hooks/ (never tracked), so the hook itself ships with the repo and
+# every clone/contributor gets it via that one command.
+#
+# Known limitation: if PKGBUILD has unstaged changes on top of staged
+# ones, `git add` below will stage all of it, same caveat as any
+# pre-commit hook that rewrites-and-restages a file.
+
+set -euo pipefail
+
+CARGO_TOML="Cargo.toml"
+PKGBUILD="arch/PKGBUILD"
+
+# Nothing to sync if either file is missing - warn but don't block the
+# commit, in case the repo layout changes later.
+if [[ ! -f "$CARGO_TOML" ]]; then
+    echo "pre-commit: $CARGO_TOML not found, skipping PKGBUILD version check" >&2
+    exit 0
+fi
+if [[ ! -f "$PKGBUILD" ]]; then
+    echo "pre-commit: $PKGBUILD not found, skipping PKGBUILD version check" >&2
+    exit 0
+fi
+
+# Pull the version out of Cargo.toml's [package] table specifically - not
+# just the first "version = " line in the file, since dependency tables
+# ([dependencies.foo]) can have their own. Plain sub()/POSIX awk only, no
+# gawk-only match()-with-array extension, so this runs the same under
+# mawk/gawk/BSD awk.
+cargo_version=$(awk '
+    /^\[package\]/ { in_package = 1; next }
+    /^\[/ { in_package = 0 }
+    in_package && /^version[[:space:]]*=/ {
+        line = $0
+        sub(/^[^"]*"/, "", line)
+        sub(/".*$/, "", line)
+        print line
+        exit
+    }
+' "$CARGO_TOML")
+
+if [[ -z "$cargo_version" ]]; then
+    echo "pre-commit: couldn't find a [package] version in $CARGO_TOML" >&2
+    exit 1
+fi
+
+pkg_version=$(awk -F= '/^pkgver=/ { print $2; exit }' "$PKGBUILD")
+
+if [[ -z "$pkg_version" ]]; then
+    echo "pre-commit: couldn't find pkgver= in $PKGBUILD" >&2
+    exit 1
+fi
+
+if [[ "$pkg_version" == "$cargo_version" ]]; then
+    exit 0
+fi
+
+echo "pre-commit: PKGBUILD pkgver ($pkg_version) is out of sync with Cargo.toml ($cargo_version) - updating"
+
+sed -i.bak \
+    -e "s/^pkgver=.*/pkgver=${cargo_version}/" \
+    -e "s/^pkgrel=.*/pkgrel=1/" \
+    "$PKGBUILD"
+rm -f "${PKGBUILD}.bak"
+
+git add "$PKGBUILD"
+
+echo "pre-commit: PKGBUILD updated to pkgver=${cargo_version}, pkgrel=1 and staged"
+exit 0
