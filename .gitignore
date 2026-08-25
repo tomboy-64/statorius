@@ -4,7 +4,5 @@
 /npcap-sdk-1.16
 *.lib
 *.dll
-/arch/src/
-/arch/statorius*.zst
-/arch/v*.tar.gz
-/arch/pkg/
+/arch/
+!/arch/PKGBUILD
