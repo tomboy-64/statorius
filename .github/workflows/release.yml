@@ -123,7 +123,6 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          # NEW: Added the MSI folder and the version-synced PKGBUILD to the files list
           files: |
             artifacts/statorius-linux-amd64/*
             artifacts/statorius-windows-amd64.exe/*

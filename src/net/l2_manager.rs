@@ -76,6 +76,15 @@ pub enum L2JobRequest {
         timeout: Duration,
         respond_to: oneshot::Sender<L2PingOutcomeWire>,
     },
+    /// Same idea as `Ping`, but a bare ARP (V4) / Neighbor Solicitation
+    /// (V6) exchange instead of a full ICMP echo.
+    ArpPing {
+        source_ip: IpAddr,
+        target: IpAddr,
+        vlan: Option<u16>,
+        timeout: Duration,
+        respond_to: oneshot::Sender<L2PingOutcomeWire>,
+    },
     /// Check whether `candidate` (a source address under consideration,
     /// *not* a ping target) is already claimed by someone else.
     CheckDuplicate {
@@ -91,6 +100,9 @@ impl L2JobRequest {
         let message = "L2 mode is not active".to_owned();
         match self {
             L2JobRequest::Ping { respond_to, .. } => {
+                let _ = respond_to.send(L2PingOutcomeWire::Error(message));
+            }
+            L2JobRequest::ArpPing { respond_to, .. } => {
                 let _ = respond_to.send(L2PingOutcomeWire::Error(message));
             }
             L2JobRequest::CheckDuplicate { respond_to, .. } => {
@@ -115,6 +127,27 @@ impl L2JobRequest {
                     vlan,
                     timeout_ms: timeout.as_millis() as u32,
                 },
+                PendingReply::Ping(respond_to),
+            ),
+            L2JobRequest::ArpPing {
+                source_ip,
+                target,
+                vlan,
+                timeout,
+                respond_to,
+            } => (
+                L2Message::ArpPingRequest {
+                    id,
+                    source_ip,
+                    target,
+                    vlan,
+                    timeout_ms: timeout.as_millis() as u32,
+                },
+                // Reuses `PendingReply::Ping` - an ARP ping's reply is
+                // handled identically to an ICMP ping's once it's a
+                // `L2PingOutcomeWire` in hand; only the wire message tag
+                // that produced it differs (see the `incoming` match in
+                // `l2_manager_task`).
                 PendingReply::Ping(respond_to),
             ),
             L2JobRequest::CheckDuplicate {
@@ -265,6 +298,14 @@ pub async fn l2_manager_task(
             incoming = async { helper_rx.as_mut().unwrap().recv().await }, if helper_rx.is_some() => {
                 match incoming {
                     Some(L2Message::PingResponse { id, outcome }) => {
+                        if let Some(PendingReply::Ping(tx)) = pending.remove(&id) {
+                            let _ = tx.send(outcome);
+                        }
+                    }
+                    Some(L2Message::ArpPingResponse { id, outcome }) => {
+                        // Same `PendingReply::Ping` slot a `PingResponse`
+                        // would resolve - see the comment in
+                        // `into_message_and_reply` above.
                         if let Some(PendingReply::Ping(tx)) = pending.remove(&id) {
                             let _ = tx.send(outcome);
                         }

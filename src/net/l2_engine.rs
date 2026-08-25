@@ -19,11 +19,11 @@
 //! address" resolution request `resolve_mac` sends when actually routing a
 //! ping.
 //!
-//! `L2Job` is deliberately the extension point for future scan methods: a
-//! `TcpConnectScan`/`UdpNullScan` variant would reuse `l2_frame`'s Ethernet/
-//! VLAN/IPv4/IPv6 building blocks and this same one-at-a-time processing
-//! loop - only the L4 build/match logic in a new `do_*` function would be
-//! new.
+//! `L2Job` is deliberately the extension point for future scan methods -
+//! `ArpPing` (below) is the first of those; a `TcpConnectScan`/`UdpNullScan`
+//! variant would follow the same shape, reusing `l2_frame`'s Ethernet/VLAN/
+//! IPv4/IPv6 building blocks and this same one-at-a-time processing loop -
+//! only the L4 build/match logic in a new `do_*` function would be new.
 
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
@@ -54,6 +54,15 @@ pub enum L2Job {
     /// address the user intends to send *from* - not necessarily this
     /// interface's own configured address).
     Ping {
+        source_ip: IpAddr,
+        target: IpAddr,
+        vlan: Option<u16>,
+        timeout: Duration,
+        respond_to: oneshot::Sender<L2PingOutcome>,
+    },
+    /// Same idea as `Ping`, but a bare ARP (V4) / Neighbor Solicitation
+    /// (V6) exchange instead of a full ICMP echo - see `do_arp_ping`.
+    ArpPing {
         source_ip: IpAddr,
         target: IpAddr,
         vlan: Option<u16>,
@@ -140,6 +149,16 @@ fn engine_loop(mut rx: mpsc::Receiver<L2Job>) {
                 );
                 let _ = respond_to.send(outcome);
             }
+            L2Job::ArpPing {
+                source_ip,
+                target,
+                vlan,
+                timeout,
+                respond_to,
+            } => {
+                let outcome = do_arp_ping(&mut cap, &ctx, source_ip, target, vlan, timeout);
+                let _ = respond_to.send(outcome);
+            }
             L2Job::CheckDuplicate {
                 candidate,
                 vlan,
@@ -157,6 +176,9 @@ fn drain_with_error(rx: &mut mpsc::Receiver<L2Job>, message: String) {
     while let Some(job) = rx.blocking_recv() {
         match job {
             L2Job::Ping { respond_to, .. } => {
+                let _ = respond_to.send(L2PingOutcome::Error(message.clone()));
+            }
+            L2Job::ArpPing { respond_to, .. } => {
                 let _ = respond_to.send(L2PingOutcome::Error(message.clone()));
             }
             L2Job::CheckDuplicate { respond_to, .. } => {
@@ -563,6 +585,122 @@ fn do_ping_v6(
     L2PingOutcome::Timeout
 }
 
+fn do_arp_ping(
+    cap: &mut pcap::Capture<pcap::Active>,
+    ctx: &InterfaceContext,
+    source_ip: IpAddr,
+    target: IpAddr,
+    vlan: Option<u16>,
+    timeout: Duration,
+) -> L2PingOutcome {
+    match (source_ip, target) {
+        (IpAddr::V4(src), IpAddr::V4(dst)) => do_arp_ping_v4(cap, ctx, src, dst, vlan, timeout),
+        (IpAddr::V6(src), IpAddr::V6(dst)) => do_arp_ping_v6(cap, ctx, src, dst, vlan, timeout),
+        _ => L2PingOutcome::Error(
+            "Source IP and target IP must be the same address family".to_owned(),
+        ),
+    }
+}
+
+/// ARP-based reachability check: send an ARP request for `target`, claiming
+/// to be `source_ip`, and time how long a reply takes - the same
+/// "who-has/is-at" exchange `resolve_mac_v4` uses internally to learn a MAC
+/// before routing a ping, but run here as a first-class, directly-timed
+/// result of its own rather than a caching side-effect. Deliberately
+/// doesn't touch `neighbor_cache` or route through a gateway the way
+/// `do_ping_v4` does for an off-link target: ARP itself has no such
+/// concept - it's always a direct broadcast on the local segment, so a
+/// target that isn't actually on this segment simply times out here,
+/// which is the correct, meaningful answer for an ARP ping specifically
+/// (as opposed to a full ICMP ping, which can still succeed off-link via
+/// the gateway).
+fn do_arp_ping_v4(
+    cap: &mut pcap::Capture<pcap::Active>,
+    ctx: &InterfaceContext,
+    source_ip: Ipv4Addr,
+    target: Ipv4Addr,
+    vlan: Option<u16>,
+    timeout: Duration,
+) -> L2PingOutcome {
+    let arp_payload = build_arp_request(ctx.mac, source_ip, target);
+    let frame = build_ethernet_frame(BROADCAST_MAC, ctx.mac, vlan, 0x0806, &arp_payload);
+
+    let sent_at = Instant::now();
+    if let Err(e) = cap.sendpacket(frame) {
+        return L2PingOutcome::Error(format!("Failed to send ARP request: {e}"));
+    }
+
+    let deadline = sent_at + timeout;
+    let found = read_until(cap, deadline, |data| {
+        let link = parse_link(data)?;
+        if link.vlan != vlan || !l2_frame::is_arp_ethertype(link.ethertype) {
+            return None;
+        }
+        let (sender_ip, _sender_mac) = parse_arp_reply(&data[link.payload_offset..])?;
+        (sender_ip == target).then_some(())
+    });
+
+    match found {
+        Some(()) => L2PingOutcome::Success { rtt: sent_at.elapsed() },
+        None => L2PingOutcome::Timeout,
+    }
+}
+
+/// Same idea as `do_arp_ping_v4`, using a Neighbor Solicitation/
+/// Advertisement exchange instead - IPv6 has no ARP, NDP is the direct
+/// analog, and (like a solicited-node multicast NS in general) this is
+/// still inherently local-segment-only, same reasoning as the v4 side.
+/// Doesn't require this interface to have any IPv6 address of its own
+/// configured, unlike `resolve_mac_v6`: `source_ip` (which may be a
+/// candidate address, not this interface's real one) is what goes on the
+/// wire as the solicitation's source, not `ctx.ipv6`.
+fn do_arp_ping_v6(
+    cap: &mut pcap::Capture<pcap::Active>,
+    ctx: &InterfaceContext,
+    source_ip: Ipv6Addr,
+    target: Ipv6Addr,
+    vlan: Option<u16>,
+    timeout: Duration,
+) -> L2PingOutcome {
+    let solicited_node = solicited_node_multicast(target);
+    let dst_mac = multicast_mac_for_ipv6(solicited_node);
+
+    let ns_payload = build_neighbor_solicitation(ctx.mac, target);
+    let ip_packet = build_ipv6_packet(
+        source_ip,
+        solicited_node,
+        l2_frame::icmpv6_protocol(),
+        l2_frame::ndp_hop_limit(),
+        &ns_payload,
+    );
+    let frame = build_ethernet_frame(dst_mac, ctx.mac, vlan, 0x86DD, &ip_packet);
+
+    let sent_at = Instant::now();
+    if let Err(e) = cap.sendpacket(frame) {
+        return L2PingOutcome::Error(format!("Failed to send Neighbor Solicitation: {e}"));
+    }
+
+    let deadline = sent_at + timeout;
+    let found = read_until(cap, deadline, |data| {
+        let link = parse_link(data)?;
+        if link.vlan != vlan || !l2_frame::is_ipv6_ethertype(link.ethertype) {
+            return None;
+        }
+        let ip = parse_ipv6(&data[link.payload_offset..])?;
+        if ip.protocol != l2_frame::icmpv6_protocol() {
+            return None;
+        }
+        let l4 = &data[link.payload_offset + ip.l4_offset..];
+        let (advertised, _mac) = parse_neighbor_advertisement(l4)?;
+        (advertised == target).then_some(())
+    });
+
+    match found {
+        Some(()) => L2PingOutcome::Success { rtt: sent_at.elapsed() },
+        None => L2PingOutcome::Timeout,
+    }
+}
+
 fn do_duplicate_check(
     cap: &mut pcap::Capture<pcap::Active>,
     ctx: &InterfaceContext,
@@ -578,11 +716,14 @@ fn do_duplicate_check(
 
 /// ARP-Probe for `candidate` (RFC 5227 §2.1.1: sender protocol address
 /// 0.0.0.0) and keep listening for the *whole* window rather than stopping
-/// at the first reply, collecting every distinct MAC that answers. More
-/// than one distinct MAC answering the same IP is an unambiguous duplicate;
-/// fewer than two is not - though a duplicate host that simply doesn't
-/// answer within the window will be missed (see the explanation given
-/// alongside this feature).
+/// at the first reply, collecting every distinct MAC that answers. Any
+/// reply at all means someone already claims `candidate` - a single
+/// answering MAC is already `Duplicate`; listening the full window instead
+/// of returning on the first reply exists to also catch every other MAC if
+/// more than one host answers (worth showing all of them), not to require
+/// more than one before calling it a duplicate. A duplicate host that
+/// simply doesn't answer within the window will still be missed (see the
+/// explanation given alongside this feature).
 fn do_duplicate_check_v4(
     cap: &mut pcap::Capture<pcap::Active>,
     ctx: &InterfaceContext,
@@ -620,12 +761,12 @@ fn do_duplicate_check_v4(
         }
     }
 
-    if seen.len() > 1 {
+    if seen.is_empty() {
+        L2DuplicateOutcome::Clear
+    } else {
         L2DuplicateOutcome::Duplicate {
             macs: seen.iter().map(|m| m.to_string()).collect(),
         }
-    } else {
-        L2DuplicateOutcome::Clear
     }
 }
 
@@ -688,11 +829,11 @@ fn do_duplicate_check_v6(
         }
     }
 
-    if seen.len() > 1 {
+    if seen.is_empty() {
+        L2DuplicateOutcome::Clear
+    } else {
         L2DuplicateOutcome::Duplicate {
             macs: seen.iter().map(|m| m.to_string()).collect(),
         }
-    } else {
-        L2DuplicateOutcome::Clear
     }
 }

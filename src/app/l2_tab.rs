@@ -6,7 +6,7 @@ use tokio::sync::{mpsc, oneshot};
 use crate::net::l2::L2Readiness;
 use crate::net::l2_ipc::L2DuplicateOutcomeWire;
 use crate::net::l2_manager::{L2Command, L2JobRequest, L2Status, SharedL2Status};
-use crate::net::l2_pinger::{L2PingEntry, L2Phase, L2PingerCommand, L2PingerKey};
+use crate::net::l2_pinger::{L2PingEntry, L2Phase, L2PingerCommand, L2PingerKey, L2PingMethod};
 
 use super::widgets::{render_average_indicator, render_last_indicator, render_since_indicator};
 use super::StatoriusApp;
@@ -127,6 +127,7 @@ impl StatoriusApp {
             prefix_len: prefix,
             vlan,
             timeout: Duration::from_millis(timeout_ms),
+            method: self.l2_pinger_method,
         };
         if let Err(e) = self.l2_pinger_tx.try_send(command) {
             self.l2_pinger_error = Some(format!("Failed to queue L2 pinger: {e}"));
@@ -181,6 +182,30 @@ impl StatoriusApp {
             }
         });
 
+        ui.horizontal(|ui| {
+            ui.label("Method:");
+            egui::ComboBox::from_id_salt("l2_pinger_method")
+                .selected_text(match self.l2_pinger_method {
+                    L2PingMethod::Icmp => "ICMP",
+                    L2PingMethod::ArpNdp => "ARP/NDP",
+                })
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut self.l2_pinger_method, L2PingMethod::Icmp, "ICMP");
+                    ui.selectable_value(
+                        &mut self.l2_pinger_method,
+                        L2PingMethod::ArpNdp,
+                        "ARP/NDP",
+                    );
+                });
+            ui.weak(match self.l2_pinger_method {
+                L2PingMethod::Icmp => "Full ICMP echo request/reply.",
+                L2PingMethod::ArpNdp => {
+                    "Bare ARP/NDP exchange - faster, and doesn't need the target to answer ICMP, \
+                     just to be present."
+                }
+            });
+        });
+
         // Quick-select for VLANs used earlier this run - kept as a row of
         // buttons rather than a native dropdown widget, to avoid a combo-box
         // API this session couldn't verify.
@@ -203,13 +228,14 @@ impl StatoriusApp {
 
         egui::ScrollArea::vertical().id_salt("l2_pinger_scroll").show(ui, |ui| {
             egui::Grid::new("l2_pinger_grid")
-                .num_columns(8)
+                .num_columns(9)
                 .striped(true)
                 .spacing([12.0, 6.0])
                 .show(ui, |ui| {
                     ui.strong("Source");
                     ui.strong("Target");
                     ui.strong("VLAN");
+                    ui.strong("Method");
                     ui.strong("Round");
                     ui.strong("Last");
                     ui.strong("Since");
@@ -226,6 +252,10 @@ impl StatoriusApp {
                                 .map(|v| v.to_string())
                                 .unwrap_or_else(|| "-".to_owned()),
                         );
+                        ui.label(match entry.method {
+                            L2PingMethod::Icmp => "ICMP",
+                            L2PingMethod::ArpNdp => "ARP/NDP",
+                        });
                         render_l2_phase_indicator(ui, entry.phase, &entry.duplicate_macs);
                         render_last_indicator(ui, &entry.last_result);
                         render_since_indicator(ui, &entry.last_updated);
@@ -356,10 +386,7 @@ fn render_l2_input_indicator(ui: &mut egui::Ui, validation: &L2InputValidation) 
         ),
         L2InputValidation::Duplicate(macs) => (
             egui::Color32::from_rgb(210, 60, 60),
-            format!(
-                "Duplicate IP! More than one host answered: {}",
-                macs.join(", ")
-            ),
+            format!("Duplicate IP! Already answered by: {}", macs.join(", ")),
         ),
         L2InputValidation::Clear => (
             egui::Color32::from_rgb(60, 170, 60),
@@ -440,6 +467,7 @@ fn render_l2_pinger_controls(
                     prefix_len: entry.prefix_len,
                     vlan: entry.vlan,
                     timeout: entry.timeout,
+                    method: entry.method,
                 });
             }
         }

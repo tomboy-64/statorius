@@ -8,7 +8,7 @@ use crate::net::dns_query::{QueryOutcome, TraceOutcome};
 use crate::net::l2::L2Readiness;
 use crate::net::l2_ipc::L2DuplicateOutcomeWire;
 use crate::net::l2_manager::{L2Command, L2JobRequest, L2Status, SharedL2Status};
-use crate::net::l2_pinger::{L2PingerCommand, L2PingerState};
+use crate::net::l2_pinger::{L2PingMethod, L2PingerCommand, L2PingerState};
 use crate::state::{SharedState, WorkerCommand};
 use hickory_resolver::proto::rr::RecordType;
 
@@ -89,6 +89,11 @@ pub struct StatoriusApp {
     l2_pinger_target_input: String,
     l2_pinger_vlan_input: String,
     l2_pinger_timeout_input: String,
+    /// Method for the *next* pairing started from the add-form - see
+    /// `L2PingMethod`. Each already-running pairing keeps whatever it was
+    /// started with, same relationship `ping_method_choice` has to the
+    /// plain Ping tab's running targets.
+    l2_pinger_method: L2PingMethod,
     /// VLANs entered so far this run, offered back as quick-select buttons.
     known_vlans: Vec<u16>,
     l2_pinger_error: Option<String>,
@@ -262,6 +267,7 @@ impl StatoriusApp {
             l2_pinger_target_input: String::new(),
             l2_pinger_vlan_input: String::new(),
             l2_pinger_timeout_input: "1000".to_owned(),
+            l2_pinger_method: L2PingMethod::Icmp,
             known_vlans: Vec::new(),
             l2_pinger_error: None,
             l2_input_validated_for: String::new(),

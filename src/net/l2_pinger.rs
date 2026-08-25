@@ -1,9 +1,10 @@
 //! The "L2 Pingers" feature: a list of (source IP, target) pairs pinged
 //! over raw Ethernet frames (via `l2_manager`/`l2_engine`), each with its
-//! own VLAN, target IP/prefix, source IP, and per-ping timeout. Every round
-//! checks the *source* IP for duplicateness first (not the target - see the
-//! explanation given alongside this feature) before actually pinging, then
-//! sleeps a second before the next round.
+//! own VLAN, target IP/prefix, source IP, per-ping timeout, and method
+//! (full ICMP echo, or a bare ARP/NDP exchange - see `L2PingMethod`). Every
+//! round checks the *source* IP for duplicateness first (not the target -
+//! see the explanation given alongside this feature) before actually
+//! pinging, then sleeps a second before the next round.
 //!
 //! Mirrors `state::SharedState`/`net::ping_worker`'s shape on purpose:
 //! `L2PingerState` is the shared, lock-protected snapshot the UI reads every
@@ -31,8 +32,26 @@ use super::l2_manager::L2JobRequest;
 use crate::state::{PingResult, HISTORY_LEN};
 
 /// A (source IP, target) pair - the unique identity of one row in the L2
-/// Pingers list.
+/// Pingers list. A pairing can only run one method at a time - starting it
+/// again with a different `L2PingMethod` restarts it under the new one
+/// rather than running both concurrently, same as changing any other field
+/// (VLAN, timeout, ...) on an existing pairing already does.
 pub type L2PingerKey = (IpAddr, IpAddr);
+
+/// Which flavor of reachability check a pairing performs each round, once
+/// the mandatory duplicate-check on `source_ip` (which always happens,
+/// regardless of this) has passed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum L2PingMethod {
+    /// A full ICMP-over-L2 echo request/reply - today's only behavior,
+    /// still the default.
+    Icmp,
+    /// A bare ARP (V4) / Neighbor Solicitation (V6) exchange instead -
+    /// faster and simpler than a full echo, and doesn't require the target
+    /// to run an IP stack that answers ICMP at all, just to be present on
+    /// the segment. See `l2_engine::do_arp_ping`.
+    ArpNdp,
+}
 
 /// One round's current phase for a pairing - shown as the small colored dot
 /// next to its row: yellow (checking) / red (duplicate) / teal (in flight) /
@@ -56,6 +75,7 @@ pub struct L2PingEntry {
     pub prefix_len: u8,
     pub vlan: Option<u16>,
     pub timeout: Duration,
+    pub method: L2PingMethod,
     pub phase: L2Phase,
     pub last_result: Option<PingResult>,
     pub last_updated: Option<Instant>,
@@ -75,6 +95,7 @@ impl L2PingEntry {
         prefix_len: u8,
         vlan: Option<u16>,
         timeout: Duration,
+        method: L2PingMethod,
     ) -> Self {
         Self {
             source_ip,
@@ -82,6 +103,7 @@ impl L2PingEntry {
             prefix_len,
             vlan,
             timeout,
+            method,
             phase: L2Phase::Idle,
             last_result: None,
             last_updated: None,
@@ -127,10 +149,11 @@ impl L2PingerState {
         prefix_len: u8,
         vlan: Option<u16>,
         timeout: Duration,
+        method: L2PingMethod,
     ) {
         let mut map = self.inner.lock().unwrap();
         map.entry((source_ip, target))
-            .or_insert_with(|| L2PingEntry::new(source_ip, target, prefix_len, vlan, timeout));
+            .or_insert_with(|| L2PingEntry::new(source_ip, target, prefix_len, vlan, timeout, method));
     }
 
     fn set_phase(&self, key: L2PingerKey, phase: L2Phase) {
@@ -197,6 +220,7 @@ pub enum L2PingerCommand {
         prefix_len: u8,
         vlan: Option<u16>,
         timeout: Duration,
+        method: L2PingMethod,
     },
     Stop(L2PingerKey),
     Delete(L2PingerKey),
@@ -228,6 +252,7 @@ pub async fn l2_pinger_worker(
                 prefix_len,
                 vlan,
                 timeout,
+                method,
             } => {
                 let key = (source_ip, target);
                 if let Some(old) = handles.remove(&key) {
@@ -236,7 +261,7 @@ pub async fn l2_pinger_worker(
                     let _ = old.task.await;
                 }
 
-                state.ensure_target(source_ip, target, prefix_len, vlan, timeout);
+                state.ensure_target(source_ip, target, prefix_len, vlan, timeout, method);
                 state.set_running(key, true);
 
                 let stop_flag = Arc::new(AtomicBool::new(false));
@@ -250,6 +275,7 @@ pub async fn l2_pinger_worker(
                         target,
                         vlan,
                         timeout,
+                        method,
                         task_state,
                         task_job_tx,
                         task_stop_flag,
@@ -282,6 +308,7 @@ async fn run_rounds(
     target: IpAddr,
     vlan: Option<u16>,
     timeout: Duration,
+    method: L2PingMethod,
     state: L2PingerState,
     job_tx: mpsc::Sender<L2JobRequest>,
     stop_flag: Arc<AtomicBool>,
@@ -322,9 +349,13 @@ async fn run_rounds(
             }
         }
 
-        // 2. Actually ping, from source_ip to target.
+        // 2. Actually ping, from source_ip to target - a full ICMP echo or
+        // a bare ARP/NDP exchange, depending on `method`.
         state.set_phase(key, L2Phase::InFlight);
-        let outcome = do_ping(&job_tx, source_ip, target, vlan, timeout).await;
+        let outcome = match method {
+            L2PingMethod::Icmp => do_ping(&job_tx, source_ip, target, vlan, timeout).await,
+            L2PingMethod::ArpNdp => do_arp_ping(&job_tx, source_ip, target, vlan, timeout).await,
+        };
 
         if stop_flag.load(Ordering::Relaxed) {
             break;
@@ -387,6 +418,31 @@ async fn do_ping(
     let (tx, rx) = oneshot::channel();
     if job_tx
         .send(L2JobRequest::Ping {
+            source_ip,
+            target,
+            vlan,
+            timeout,
+            respond_to: tx,
+        })
+        .await
+        .is_err()
+    {
+        return L2PingOutcomeWire::Error("L2 manager unavailable".to_owned());
+    }
+    rx.await
+        .unwrap_or_else(|_| L2PingOutcomeWire::Error("L2 manager dropped the request".to_owned()))
+}
+
+async fn do_arp_ping(
+    job_tx: &mpsc::Sender<L2JobRequest>,
+    source_ip: IpAddr,
+    target: IpAddr,
+    vlan: Option<u16>,
+    timeout: Duration,
+) -> L2PingOutcomeWire {
+    let (tx, rx) = oneshot::channel();
+    if job_tx
+        .send(L2JobRequest::ArpPing {
             source_ip,
             target,
             vlan,

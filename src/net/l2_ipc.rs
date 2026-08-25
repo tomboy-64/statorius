@@ -41,6 +41,24 @@ pub enum L2Message {
     /// Helper -> GUI: result of a `PingRequest` with the same `id`.
     PingResponse { id: u64, outcome: L2PingOutcomeWire },
 
+    /// GUI -> Helper: same idea as `PingRequest`, but a bare ARP (V4) /
+    /// Neighbor Solicitation (V6) exchange instead of a full ICMP echo -
+    /// see `l2_engine::do_arp_ping`. Same field shape as `PingRequest`
+    /// deliberately, since the only difference is which job variant the
+    /// helper dispatches to.
+    ArpPingRequest {
+        id: u64,
+        source_ip: IpAddr,
+        target: IpAddr,
+        vlan: Option<u16>,
+        timeout_ms: u32,
+    },
+    /// Helper -> GUI: result of an `ArpPingRequest` with the same `id` -
+    /// reuses `L2PingOutcomeWire` unchanged, since an ARP/NDP ping's
+    /// possible outcomes (success-with-timing / timeout / error) are
+    /// identical in shape to an ICMP ping's.
+    ArpPingResponse { id: u64, outcome: L2PingOutcomeWire },
+
     /// GUI -> Helper: check whether more than one host answers for
     /// `candidate` - a source address the user is considering using, not a
     /// ping target.
