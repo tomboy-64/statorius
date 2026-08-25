@@ -13,23 +13,22 @@
 # .git/hooks/ (never tracked), so the hook itself ships with the repo and
 # every clone/contributor gets it via that one command.
 #
+# By design, this hook can NEVER block a commit. Every step that could
+# plausibly fail - a missing file, an unparseable version, sed erroring,
+# or `git add` refusing a path it considers ignored (see the -f below) -
+# is tolerated and only warns to stderr; worst case, the sync just
+# doesn't happen this time and PKGBUILD is left exactly as it was. There
+# is deliberately no `set -e` here for that reason.
+#
 # Known limitation: if PKGBUILD has unstaged changes on top of staged
 # ones, `git add` below will stage all of it, same caveat as any
 # pre-commit hook that rewrites-and-restages a file.
 
-set -euo pipefail
-
 CARGO_TOML="Cargo.toml"
 PKGBUILD="arch/PKGBUILD"
 
-# Nothing to sync if either file is missing - warn but don't block the
-# commit, in case the repo layout changes later.
-if [[ ! -f "$CARGO_TOML" ]]; then
-    echo "pre-commit: $CARGO_TOML not found, skipping PKGBUILD version check" >&2
-    exit 0
-fi
-if [[ ! -f "$PKGBUILD" ]]; then
-    echo "pre-commit: $PKGBUILD not found, skipping PKGBUILD version check" >&2
+if [[ ! -f "$CARGO_TOML" || ! -f "$PKGBUILD" ]]; then
+    echo "pre-commit: $CARGO_TOML or $PKGBUILD not found, skipping PKGBUILD version check" >&2
     exit 0
 fi
 
@@ -48,18 +47,13 @@ cargo_version=$(awk '
         print line
         exit
     }
-' "$CARGO_TOML")
+' "$CARGO_TOML" 2>/dev/null)
 
-if [[ -z "$cargo_version" ]]; then
-    echo "pre-commit: couldn't find a [package] version in $CARGO_TOML" >&2
-    exit 1
-fi
+pkg_version=$(awk -F= '/^pkgver=/ { print $2; exit }' "$PKGBUILD" 2>/dev/null)
 
-pkg_version=$(awk -F= '/^pkgver=/ { print $2; exit }' "$PKGBUILD")
-
-if [[ -z "$pkg_version" ]]; then
-    echo "pre-commit: couldn't find pkgver= in $PKGBUILD" >&2
-    exit 1
+if [[ -z "$cargo_version" || -z "$pkg_version" ]]; then
+    echo "pre-commit: couldn't read both versions (Cargo.toml='$cargo_version', PKGBUILD='$pkg_version') - skipping" >&2
+    exit 0
 fi
 
 if [[ "$pkg_version" == "$cargo_version" ]]; then
@@ -68,13 +62,27 @@ fi
 
 echo "pre-commit: PKGBUILD pkgver ($pkg_version) is out of sync with Cargo.toml ($cargo_version) - updating"
 
-sed -i.bak \
+if sed -i.bak \
     -e "s/^pkgver=.*/pkgver=${cargo_version}/" \
     -e "s/^pkgrel=.*/pkgrel=1/" \
-    "$PKGBUILD"
-rm -f "${PKGBUILD}.bak"
+    "$PKGBUILD" 2>/dev/null
+then
+    rm -f "${PKGBUILD}.bak"
+    # -f: PKGBUILD is meant to be tracked - that's the whole point of an
+    # `arch/*` + `!arch/PKGBUILD` .gitignore setup - so add it
+    # unconditionally rather than letting git's "path is ignored" refusal
+    # (e.g. if a broader `arch/` rule is shadowing that negation
+    # somewhere - the classic gotcha where ignoring a directory itself,
+    # rather than just its contents, defeats per-file negation inside it)
+    # turn into a hook failure that blocks the commit.
+    if git add -f "$PKGBUILD" 2>/dev/null; then
+        echo "pre-commit: PKGBUILD updated to pkgver=${cargo_version}, pkgrel=1 and staged"
+    else
+        echo "pre-commit: updated $PKGBUILD but couldn't stage it - check it in manually" >&2
+    fi
+else
+    rm -f "${PKGBUILD}.bak"
+    echo "pre-commit: failed to update $PKGBUILD - left unchanged" >&2
+fi
 
-git add "$PKGBUILD"
-
-echo "pre-commit: PKGBUILD updated to pkgver=${cargo_version}, pkgrel=1 and staged"
 exit 0
