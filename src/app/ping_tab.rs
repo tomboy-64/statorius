@@ -169,7 +169,7 @@ impl StatoriusApp {
             let mut failures = Vec::new();
             for target in targets {
                 let request =
-                    PingRequest { target, method: method.clone(), source_ip: None, count };
+                    PingRequest { target, method: method.clone(), count };
                 if let Err(e) = self.tx.try_send(WorkerCommand::Start(request)) {
                     failures.push(format!("{target}: {e}"));
                 }
@@ -403,7 +403,6 @@ impl StatoriusApp {
                 let request = PingRequest {
                     target: *target,
                     method: PingMethod::Icmp { payload_size: DEFAULT_ICMP_PAYLOAD_SIZE },
-                    source_ip: None,
                     count: None,
                 };
                 if let Err(e) = self.tx.try_send(WorkerCommand::Start(request)) {
@@ -699,7 +698,6 @@ fn render_controls(ui: &mut egui::Ui, entry: &PingEntry, tx: &mpsc::Sender<Worke
                 let request = PingRequest {
                     target: entry.target,
                     method: entry.method.clone(),
-                    source_ip: None,
                     count: entry.count,
                 };
                 let _ = tx.try_send(WorkerCommand::Start(request));

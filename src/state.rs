@@ -30,7 +30,6 @@ pub enum PingMethod {
 pub struct PingRequest {
     pub target: IpAddr,
     pub method: PingMethod,
-    pub source_ip: Option<IpAddr>,
     /// Stop automatically once this many attempts have completed - `None`
     /// runs until manually stopped (the only behavior before this field
     /// existed, and still the default from the UI).
@@ -94,22 +93,6 @@ impl PingEntry {
             history: VecDeque::with_capacity(HISTORY_LEN),
             running: true,
             count,
-        }
-    }
-
-    /// Average RTT across whichever attempts in the history window succeeded.
-    /// `None` if every attempt in the window failed (or there's no history yet) -
-    /// that's the UI's cue to render the red "no response" state.
-    pub fn rolling_average(&self) -> Option<Duration> {
-        let (sum, count) = self
-            .history
-            .iter()
-            .flatten()
-            .fold((Duration::ZERO, 0u32), |(sum, count), d| (sum + *d, count + 1));
-        if count == 0 {
-            None
-        } else {
-            Some(sum / count)
         }
     }
 }

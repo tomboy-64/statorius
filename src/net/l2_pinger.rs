@@ -114,22 +114,6 @@ impl L2PingEntry {
             duplicate_macs: Vec::new(),
         }
     }
-
-    /// Same rolling-average semantics as the plain ping list's `PingEntry`.
-    pub fn rolling_average(&self) -> Option<Duration> {
-        let (sum, count) = self
-            .history
-            .iter()
-            .flatten()
-            .fold((Duration::ZERO, 0u32), |(sum, count), d| {
-                (sum + *d, count + 1)
-            });
-        if count == 0 {
-            None
-        } else {
-            Some(sum / count)
-        }
-    }
 }
 
 #[derive(Clone, Default)]
