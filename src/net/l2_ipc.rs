@@ -5,6 +5,7 @@
 
 use std::io;
 use std::net::IpAddr;
+#[cfg(unix)]
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
