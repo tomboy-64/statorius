@@ -1,7 +1,7 @@
 # Maintainer: Your Name <your.email@example.com>
 _pkgname=statorius
 pkgname=${_pkgname}-git
-pkgver=0.7.2
+pkgver=0.7.5
 pkgrel=1
 pkgdesc="A networking toolkit (development build)"
 arch=('x86_64')
@@ -9,7 +9,7 @@ url="https://github.com/tomboy-64/statorius"
 license=('AGPL3')
 
 depends=('glibc' 'gcc-libs')
-makedepends=('rust' 'cargo' 'git')
+makedepends=('rust' 'cargo' 'git' 'git-lfs')
 provides=("${_pkgname}")
 conflicts=("${_pkgname}")
 
@@ -28,6 +28,20 @@ pkgver() {
     printf "r%s.%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
 }
 
+prepare() {
+    cd "$srcdir/$_pkgname"
+
+    # ico/*.png (including ico/statorius-master.png, which build.rs now
+    # reads to generate the app icon on every build - see build.rs) are
+    # git-lfs tracked. makepkg's VCS git+ source only does a plain clone,
+    # which - unlike a manually-configured local checkout - can't be
+    # relied on to have the LFS smudge filter already registered, so it
+    # would otherwise leave these as pointer text instead of real PNGs.
+    # `--local` scopes the filter registration to just this repo copy.
+    git lfs install --local
+    git lfs pull
+}
+
 build() {
     cd "$srcdir/$_pkgname"
 
@@ -42,4 +56,12 @@ package() {
 
     # 2. Install desktop launcher
     install -Dm644 "$srcdir/$_pkgname.desktop" "$pkgdir/usr/share/applications/$_pkgname.desktop"
+
+    # 3. Install the hicolor-theme icon set (statorius.desktop's Icon=statorius
+    #    resolves against these) at every size shipped under ico/hicolor/.
+    for size_dir in "$srcdir/$_pkgname/ico/hicolor"/*/apps; do
+        size=$(basename "$(dirname "$size_dir")")
+        install -Dm644 "$size_dir/$_pkgname.png" \
+            "$pkgdir/usr/share/icons/hicolor/$size/apps/$_pkgname.png"
+    done
 }

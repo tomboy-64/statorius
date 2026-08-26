@@ -5,6 +5,11 @@ use super::StatoriusApp;
 impl StatoriusApp {
     /// Static license/copyright info - no state of its own, just text.
     pub(super) fn ui_about_tab(&mut self, ui: &mut egui::Ui) {
+        ui.add(
+            egui::Image::new(&self.app_icon_texture)
+                .fit_to_exact_size(egui::vec2(96.0, 96.0)),
+        );
+        ui.add_space(4.0);
         ui.heading(concat!("Statorius ", env!("CARGO_PKG_VERSION")));
         ui.add_space(8.0);
 

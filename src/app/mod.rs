@@ -233,6 +233,12 @@ pub struct StatoriusApp {
     /// formatted as `"<entry>: <reason>"`. Drives the error window; `None`
     /// means nothing to show.
     ping_list_errors: Option<Vec<String>>,
+
+    /// The app icon (ico/statorius-icon.png), decoded once and uploaded as
+    /// a texture in `main.rs` alongside the native window icon - rendered
+    /// small in the About tab. A `TextureHandle`, not a texture id, so the
+    /// GPU texture stays alive for as long as this app does.
+    app_icon_texture: egui::TextureHandle,
 }
 
 impl StatoriusApp {
@@ -249,6 +255,7 @@ impl StatoriusApp {
         dhcp_state: DhcpState,
         dns_shared: SharedDnsServers,
         dns_tx: mpsc::Sender<DnsCommand>,
+        app_icon_texture: egui::TextureHandle,
     ) -> Self {
         Self {
             target_input: String::new(),
@@ -311,6 +318,7 @@ impl StatoriusApp {
             ping_list_io_message: None,
             ping_list_load_state: None,
             ping_list_errors: None,
+            app_icon_texture,
         }
     }
 }

@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=statorius
+Comment=A networking toolbox
+# The command to run your app. %U allows passing URLs/files if needed.
+Exec=/usr/bin/statorius %U
+# Icon name (no extension/path) - resolved against the hicolor icon theme;
+# PKGBUILD installs ico/hicolor/<size>/apps/statorius.png at matching sizes
+# under /usr/share/icons/hicolor/, which is where this name gets looked up.
+Icon=statorius
+Terminal=false
+Categories=Utility;Development; # Adjust these to dictate which menu folder it goes into

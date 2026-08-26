@@ -39,6 +39,12 @@
         <Media Id='1' Cabinet='media1.cab' EmbedCab='yes' DiskPrompt='CD-ROM #1'/>
         <Property Id='DiskPrompt' Value='statorius Installation'/>
 
+        <!-- Same icon embedded into the .exe itself (see build.rs) - referenced
+             here too so it shows up in Add/Remove Programs, which reads
+             ARPPRODUCTICON rather than pulling it from the installed exe. -->
+        <Icon Id='AppIcon.ico' SourceFile='ico\statorius.ico'/>
+        <Property Id='ARPPRODUCTICON' Value='AppIcon.ico'/>
+
         <Directory Id='TARGETDIR' Name='SourceDir'>
             <Directory Id='ProgramFiles64Folder' Name='PFiles'>
                 <Directory Id='APPLICATIONFOLDER' Name='statorius'>
@@ -69,7 +75,8 @@
                           Name="statorius"
                           Description="A brief description of statorius"
                           Target="[APPLICATIONFOLDER]bin\statorius.exe"
-                          WorkingDirectory="APPLICATIONFOLDER"/>
+                          WorkingDirectory="APPLICATIONFOLDER"
+                          Icon="AppIcon.ico"/>
 
                 <!-- This ensures the shortcut is removed upon uninstall -->
                 <RemoveFolder Id="CleanUpShortCut" Directory="ApplicationProgramsFolder" On="uninstall"/>

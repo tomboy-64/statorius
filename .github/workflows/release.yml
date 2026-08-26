@@ -25,6 +25,12 @@ jobs:
     steps:
       - name: Checkout Source Code
         uses: actions/checkout@v4
+        with:
+          # build.rs now decodes ico/statorius-master.png on every build to
+          # generate the app icon - without this, actions/checkout leaves
+          # git-lfs-tracked files as their pointer text, not the real PNG,
+          # and the build fails immediately.
+          lfs: true
 
       - name: Install Rust Toolchain
         uses: dtolnay/rust-toolchain@stable

@@ -1,6 +1,6 @@
 [package]
 name = "statorius"
-version = "0.7.2"
+version = "0.7.5"
 edition = "2024"
 license = "AGPL-3.0-only"
 
@@ -55,3 +55,27 @@ windows-sys = {
         "Win32_UI_WindowsAndMessaging",
     ]
 }
+
+# Decodes ico/statorius-master.png and resizes it (with a manual
+# premultiplied-alpha step - see build.rs - to avoid black fringing from
+# the source's fully-transparent corners) into the runtime app icon on
+# every platform, and additionally into a multi-resolution .ico on
+# Windows. "ico" is the .ico encoder used by write_windows_ico(); it pulls
+# in "bmp" transitively (an .ico frame can technically be stored as
+# embedded BMP) but we always write PNG-format frames, so that codec goes
+# unused.
+#
+# winresource embeds that .ico into the .exe as a PE resource - it's only
+# ever *invoked* on Windows (see the CARGO_CFG_TARGET_OS check in
+# build.rs's main()), but both crates are plain build-dependencies rather
+# than target-gated: cfg() on a [target.'cfg(...)'.build-dependencies]
+# table is evaluated against the HOST doing the build, not the target
+# being built for (build scripts always run on the host), so gating
+# winresource under cfg(windows) there would silently drop it whenever
+# cross-compiling to Windows from a non-Windows host - exactly this
+# project's normal Linux-to-windows-gnu workflow. Compiling it
+# unconditionally and no-op'ing at runtime instead (its own documented
+# pattern) works on every host/target combination.
+[build-dependencies]
+image = { version = "0.25", default-features = false, features = ["png", "ico"] }
+winresource = "0.1"
