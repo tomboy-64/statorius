@@ -34,11 +34,12 @@ use tokio::sync::{mpsc, oneshot};
 
 use super::l2_frame::{
     self, build_arp_probe, build_arp_reply, build_arp_request, build_ethernet_frame,
-    build_icmp_echo_request, build_icmpv6_echo_request, build_ipv4_packet, build_ipv6_packet,
-    build_neighbor_advertisement, build_neighbor_solicitation, multicast_mac_for_ipv6,
-    parse_arp_reply, parse_arp_request, parse_icmp_echo_reply, parse_icmpv6_echo_reply,
-    parse_ipv4, parse_ipv6, parse_link, parse_neighbor_advertisement,
-    parse_neighbor_solicitation, solicited_node_multicast, InterfaceContext, BROADCAST_MAC,
+    build_icmp_echo_request, build_icmp_timestamp_request, build_icmpv6_echo_request,
+    build_ipv4_packet, build_ipv6_packet, build_neighbor_advertisement, build_neighbor_solicitation,
+    multicast_mac_for_ipv6, parse_arp_reply, parse_arp_request, parse_icmp_echo_reply,
+    parse_icmp_timestamp_reply, parse_icmpv6_echo_reply, parse_ipv4, parse_ipv6, parse_link,
+    parse_neighbor_advertisement, parse_neighbor_solicitation, solicited_node_multicast,
+    InterfaceContext, BROADCAST_MAC,
 };
 
 /// One outstanding piece of work for the engine. Each variant carries its
@@ -63,6 +64,18 @@ pub enum L2Job {
     /// Same idea as `Ping`, but a bare ARP (V4) / Neighbor Solicitation
     /// (V6) exchange instead of a full ICMP echo - see `do_arp_ping`.
     ArpPing {
+        source_ip: IpAddr,
+        target: IpAddr,
+        vlan: Option<u16>,
+        timeout: Duration,
+        respond_to: oneshot::Sender<L2PingOutcome>,
+    },
+    /// Same idea as `Ping`, but an ICMP Timestamp request/reply (type
+    /// 13/14) instead of echo - IPv4-only, no ICMPv6 equivalent (see
+    /// `l2_frame`'s dedicated section). Useful as a second data point:
+    /// some stacks/firewalls let one ICMP type through while blocking
+    /// another.
+    TimestampPing {
         source_ip: IpAddr,
         target: IpAddr,
         vlan: Option<u16>,
@@ -159,6 +172,27 @@ fn engine_loop(mut rx: mpsc::Receiver<L2Job>) {
                 let outcome = do_arp_ping(&mut cap, &ctx, source_ip, target, vlan, timeout);
                 let _ = respond_to.send(outcome);
             }
+            L2Job::TimestampPing {
+                source_ip,
+                target,
+                vlan,
+                timeout,
+                respond_to,
+            } => {
+                let ident = next_identifier;
+                next_identifier = next_identifier.wrapping_add(1);
+                let outcome = do_timestamp_ping(
+                    &mut cap,
+                    &ctx,
+                    &mut neighbor_cache,
+                    source_ip,
+                    target,
+                    vlan,
+                    ident,
+                    timeout,
+                );
+                let _ = respond_to.send(outcome);
+            }
             L2Job::CheckDuplicate {
                 candidate,
                 vlan,
@@ -179,6 +213,9 @@ fn drain_with_error(rx: &mut mpsc::Receiver<L2Job>, message: String) {
                 let _ = respond_to.send(L2PingOutcome::Error(message.clone()));
             }
             L2Job::ArpPing { respond_to, .. } => {
+                let _ = respond_to.send(L2PingOutcome::Error(message.clone()));
+            }
+            L2Job::TimestampPing { respond_to, .. } => {
                 let _ = respond_to.send(L2PingOutcome::Error(message.clone()));
             }
             L2Job::CheckDuplicate { respond_to, .. } => {
@@ -571,6 +608,116 @@ fn do_ping_v6(
                     continue;
                 }
                 if let Some((reply_ident, _seq)) = parse_icmpv6_echo_reply(l4) {
+                    if reply_ident == identifier {
+                        return L2PingOutcome::Success {
+                            rtt: sent_at.elapsed(),
+                        };
+                    }
+                }
+            }
+            Err(pcap::Error::TimeoutExpired) => continue,
+            Err(_) => continue,
+        }
+    }
+    L2PingOutcome::Timeout
+}
+
+/// ICMP Timestamp has no IPv6 equivalent (see `l2_frame`'s dedicated
+/// section) - unlike `do_ping`/`do_arp_ping`, there's no `_v6` sibling to
+/// dispatch to here; a V6 source/target is simply rejected up front rather
+/// than silently doing the wrong thing.
+///
+/// Otherwise identical in shape to `do_ping_v4`: resolve the target's MAC,
+/// send one request, wait for a matching reply while proxy-answering any
+/// ARP request asking about our claimed `source_ip` (see `do_ping_v4`'s
+/// comment on why that's needed) - only the frame content and the reply
+/// matcher differ.
+fn do_timestamp_ping(
+    cap: &mut pcap::Capture<pcap::Active>,
+    ctx: &InterfaceContext,
+    neighbor_cache: &mut HashMap<IpAddr, MacAddr>,
+    source_ip: IpAddr,
+    target: IpAddr,
+    vlan: Option<u16>,
+    identifier: u16,
+    timeout: Duration,
+) -> L2PingOutcome {
+    let (IpAddr::V4(source_ip), IpAddr::V4(target)) = (source_ip, target) else {
+        return L2PingOutcome::Error(
+            "ICMP Timestamp has no IPv6 equivalent - use ICMP echo for an IPv6 target".to_owned(),
+        );
+    };
+
+    let resolve_target = if ctx.is_on_link(target) {
+        target
+    } else {
+        match ctx.gateway {
+            Some(gw) => gw,
+            None => {
+                return L2PingOutcome::Error(
+                    "Target is off-link and no default IPv4 gateway is known".to_owned(),
+                );
+            }
+        }
+    };
+
+    let dst_mac = match resolve_mac(cap, ctx, neighbor_cache, IpAddr::V4(resolve_target), vlan, timeout) {
+        Ok(mac) => mac,
+        Err(e) => return L2PingOutcome::Error(e),
+    };
+
+    let icmp_payload = build_icmp_timestamp_request(identifier, 0);
+    let ip_packet =
+        build_ipv4_packet(source_ip, target, l2_frame::icmp_protocol(), identifier, &icmp_payload);
+    let frame = build_ethernet_frame(dst_mac, ctx.mac, vlan, 0x0800, &ip_packet);
+
+    let sent_at = Instant::now();
+    if let Err(e) = cap.sendpacket(frame) {
+        return L2PingOutcome::Error(format!("Failed to send ICMP timestamp request: {e}"));
+    }
+
+    let deadline = sent_at + timeout;
+    while Instant::now() < deadline {
+        match cap.next_packet() {
+            Ok(packet) => {
+                let Some(link) = parse_link(packet.data) else {
+                    continue;
+                };
+                if link.vlan != vlan {
+                    continue;
+                }
+
+                if l2_frame::is_arp_ethertype(link.ethertype) {
+                    if let Some((req_ip, req_mac, asking_about)) =
+                        parse_arp_request(&packet.data[link.payload_offset..])
+                    {
+                        if asking_about == source_ip {
+                            let reply_payload =
+                                build_arp_reply(ctx.mac, source_ip, req_mac, req_ip);
+                            let reply_frame = build_ethernet_frame(
+                                req_mac,
+                                ctx.mac,
+                                vlan,
+                                0x0806,
+                                &reply_payload,
+                            );
+                            let _ = cap.sendpacket(reply_frame);
+                        }
+                    }
+                    continue;
+                }
+
+                if !l2_frame::is_ipv4_ethertype(link.ethertype) {
+                    continue;
+                }
+                let Some(ip) = parse_ipv4(&packet.data[link.payload_offset..]) else {
+                    continue;
+                };
+                if ip.source != target || ip.destination != source_ip {
+                    continue;
+                }
+                let l4 = &packet.data[link.payload_offset + ip.l4_offset..];
+                if let Some((reply_ident, _seq)) = parse_icmp_timestamp_reply(l4) {
                     if reply_ident == identifier {
                         return L2PingOutcome::Success {
                             rtt: sent_at.elapsed(),

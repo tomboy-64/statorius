@@ -18,7 +18,10 @@ use std::net::{Ipv4Addr, Ipv6Addr};
 
 use pnet_base::MacAddr;
 use pnet_packet::arp::{ArpHardwareTypes, ArpOperations, ArpPacket, MutableArpPacket};
-use pnet_packet::icmp::{echo_reply, echo_request, IcmpPacket, IcmpTypes};
+use pnet_packet::icmp::{
+    echo_reply, echo_request, IcmpCode, IcmpPacket, IcmpTypes, MutableIcmpPacket,
+};
+use pnet_packet::Packet;
 use pnet_packet::icmpv6::ndp::{
     MutableNeighborAdvertPacket, MutableNeighborSolicitPacket, NdpOptionTypes,
     NeighborAdvertPacket, NeighborSolicitPacket,
@@ -769,4 +772,65 @@ pub fn parse_icmpv6_echo_reply(l4_payload: &[u8]) -> Option<(u16, u16)> {
     }
     let reply = icmpv6_echo_reply::EchoReplyPacket::new(l4_payload)?;
     Some((reply.get_identifier(), reply.get_sequence_number()))
+}
+
+// ---------------------------------------------------------------------
+// ICMP Timestamp (v4-only, RFC 792 §4.3) - no ICMPv6 equivalent, unlike
+// echo. Same "does this host answer" liveness check, but a different
+// message type - useful as a second data point, since some stacks/
+// firewalls let one ICMP type through while blocking another. pnet has no
+// dedicated `timestamp_request`/`timestamp_reply` submodule (only
+// `echo_request`/`echo_reply`), so this hand-builds the body directly on
+// top of the generic `Icmp`/`IcmpPacket`, whose `payload` covers
+// everything after the shared type/code/checksum header.
+// ---------------------------------------------------------------------
+
+/// Size of an ICMP Timestamp message's body (the generic `IcmpPacket`'s
+/// `payload`, i.e. everything after type/code/checksum): identifier(2) +
+/// sequence(2) + originate/receive/transmit timestamp (4 bytes each) = 16.
+const ICMP_TIMESTAMP_BODY_LEN: usize = 16;
+
+/// Build an ICMP Timestamp request (type 13) for `identifier`/`sequence`.
+/// The originate timestamp is left as 0 rather than computed (RFC 792
+/// defines it as milliseconds since UTC midnight) - a responder doesn't
+/// require it to be accurate in order to reply, and this is used purely as
+/// a liveness probe timed by our own wall clock (`Instant::elapsed`), not
+/// to read the three timestamp fields back out of the reply.
+pub fn build_icmp_timestamp_request(identifier: u16, sequence: u16) -> Vec<u8> {
+    let mut buf = vec![0u8; IcmpPacket::minimum_packet_size() + ICMP_TIMESTAMP_BODY_LEN];
+    {
+        let mut icmp =
+            MutableIcmpPacket::new(&mut buf).expect("icmp timestamp buffer sized correctly");
+        icmp.set_icmp_type(IcmpTypes::Timestamp);
+        icmp.set_icmp_code(IcmpCode::new(0));
+        icmp.set_checksum(0);
+        let mut body = [0u8; ICMP_TIMESTAMP_BODY_LEN];
+        body[0..2].copy_from_slice(&identifier.to_be_bytes());
+        body[2..4].copy_from_slice(&sequence.to_be_bytes());
+        // Bytes 4..16 (originate/receive/transmit timestamps) stay zero.
+        icmp.set_payload(&body);
+    }
+    let checksum = pnet_packet::icmp::checksum(&IcmpPacket::new(&buf).expect("just built this"));
+    let mut icmp = MutableIcmpPacket::new(&mut buf).expect("icmp timestamp buffer sized correctly");
+    icmp.set_checksum(checksum);
+    buf
+}
+
+/// If `l4_payload` is an ICMP Timestamp Reply (type 14), return its
+/// (identifier, sequence) - same return shape as `parse_icmp_echo_reply`,
+/// so `l2_engine::do_timestamp_ping` matches it identically. The three
+/// timestamp fields in the reply aren't surfaced - see the note on
+/// `build_icmp_timestamp_request` above.
+pub fn parse_icmp_timestamp_reply(l4_payload: &[u8]) -> Option<(u16, u16)> {
+    let icmp = IcmpPacket::new(l4_payload)?;
+    if icmp.get_icmp_type() != IcmpTypes::TimestampReply {
+        return None;
+    }
+    let body = icmp.payload();
+    if body.len() < 4 {
+        return None;
+    }
+    let identifier = u16::from_be_bytes([body[0], body[1]]);
+    let sequence = u16::from_be_bytes([body[2], body[3]]);
+    Some((identifier, sequence))
 }

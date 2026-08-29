@@ -105,6 +105,11 @@ impl StatoriusApp {
             );
             return;
         }
+        if self.l2_pinger_method == L2PingMethod::Timestamp && !source_ip.is_ipv4() {
+            self.l2_pinger_error =
+                Some("ICMP Timestamp is IPv4-only - pick ICMP or ARP/NDP for an IPv6 pairing".to_owned());
+            return;
+        }
 
         let vlan = parse_vlan(&self.l2_pinger_vlan_input);
         if let Some(v) = vlan {
@@ -188,6 +193,7 @@ impl StatoriusApp {
                 .selected_text(match self.l2_pinger_method {
                     L2PingMethod::Icmp => "ICMP",
                     L2PingMethod::ArpNdp => "ARP/NDP",
+                    L2PingMethod::Timestamp => "Timestamp",
                 })
                 .show_ui(ui, |ui| {
                     ui.selectable_value(&mut self.l2_pinger_method, L2PingMethod::Icmp, "ICMP");
@@ -196,12 +202,21 @@ impl StatoriusApp {
                         L2PingMethod::ArpNdp,
                         "ARP/NDP",
                     );
+                    ui.selectable_value(
+                        &mut self.l2_pinger_method,
+                        L2PingMethod::Timestamp,
+                        "Timestamp",
+                    );
                 });
             ui.weak(match self.l2_pinger_method {
                 L2PingMethod::Icmp => "Full ICMP echo request/reply.",
                 L2PingMethod::ArpNdp => {
                     "Bare ARP/NDP exchange - faster, and doesn't need the target to answer ICMP, \
                      just to be present."
+                }
+                L2PingMethod::Timestamp => {
+                    "ICMP Timestamp request/reply - IPv4 only. A useful second data point: some \
+                     stacks/firewalls let this through while blocking echo, or vice versa."
                 }
             });
         });
@@ -255,6 +270,7 @@ impl StatoriusApp {
                         ui.label(match entry.method {
                             L2PingMethod::Icmp => "ICMP",
                             L2PingMethod::ArpNdp => "ARP/NDP",
+                            L2PingMethod::Timestamp => "Timestamp",
                         });
                         render_l2_phase_indicator(ui, entry.phase, &entry.duplicate_macs);
                         render_last_indicator(ui, &entry.last_result);

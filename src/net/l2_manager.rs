@@ -85,6 +85,15 @@ pub enum L2JobRequest {
         timeout: Duration,
         respond_to: oneshot::Sender<L2PingOutcomeWire>,
     },
+    /// Same idea as `Ping`, but an ICMP Timestamp request/reply instead of
+    /// echo - IPv4-only, see `l2_engine::do_timestamp_ping`.
+    TimestampPing {
+        source_ip: IpAddr,
+        target: IpAddr,
+        vlan: Option<u16>,
+        timeout: Duration,
+        respond_to: oneshot::Sender<L2PingOutcomeWire>,
+    },
     /// Check whether `candidate` (a source address under consideration,
     /// *not* a ping target) is already claimed by someone else.
     CheckDuplicate {
@@ -103,6 +112,9 @@ impl L2JobRequest {
                 let _ = respond_to.send(L2PingOutcomeWire::Error(message));
             }
             L2JobRequest::ArpPing { respond_to, .. } => {
+                let _ = respond_to.send(L2PingOutcomeWire::Error(message));
+            }
+            L2JobRequest::TimestampPing { respond_to, .. } => {
                 let _ = respond_to.send(L2PingOutcomeWire::Error(message));
             }
             L2JobRequest::CheckDuplicate { respond_to, .. } => {
@@ -148,6 +160,23 @@ impl L2JobRequest {
                 // `L2PingOutcomeWire` in hand; only the wire message tag
                 // that produced it differs (see the `incoming` match in
                 // `l2_manager_task`).
+                PendingReply::Ping(respond_to),
+            ),
+            L2JobRequest::TimestampPing {
+                source_ip,
+                target,
+                vlan,
+                timeout,
+                respond_to,
+            } => (
+                L2Message::TimestampPingRequest {
+                    id,
+                    source_ip,
+                    target,
+                    vlan,
+                    timeout_ms: timeout.as_millis() as u32,
+                },
+                // Same reasoning as `ArpPing` above.
                 PendingReply::Ping(respond_to),
             ),
             L2JobRequest::CheckDuplicate {
@@ -306,6 +335,12 @@ pub async fn l2_manager_task(
                         // Same `PendingReply::Ping` slot a `PingResponse`
                         // would resolve - see the comment in
                         // `into_message_and_reply` above.
+                        if let Some(PendingReply::Ping(tx)) = pending.remove(&id) {
+                            let _ = tx.send(outcome);
+                        }
+                    }
+                    Some(L2Message::TimestampPingResponse { id, outcome }) => {
+                        // Same reasoning as `ArpPingResponse` above.
                         if let Some(PendingReply::Ping(tx)) = pending.remove(&id) {
                             let _ = tx.send(outcome);
                         }

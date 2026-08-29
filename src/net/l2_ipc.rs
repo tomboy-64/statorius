@@ -60,6 +60,22 @@ pub enum L2Message {
     /// identical in shape to an ICMP ping's.
     ArpPingResponse { id: u64, outcome: L2PingOutcomeWire },
 
+    /// GUI -> Helper: same shape as `PingRequest`, but an ICMP Timestamp
+    /// request/reply (type 13/14) instead of echo - see
+    /// `l2_engine::do_timestamp_ping`. IPv4-only; the helper reports an
+    /// `Error` outcome if either address is IPv6 rather than silently
+    /// falling back to echo.
+    TimestampPingRequest {
+        id: u64,
+        source_ip: IpAddr,
+        target: IpAddr,
+        vlan: Option<u16>,
+        timeout_ms: u32,
+    },
+    /// Helper -> GUI: result of a `TimestampPingRequest` with the same
+    /// `id` - reuses `L2PingOutcomeWire` unchanged, same as `ArpPingResponse`.
+    TimestampPingResponse { id: u64, outcome: L2PingOutcomeWire },
+
     /// GUI -> Helper: check whether more than one host answers for
     /// `candidate` - a source address the user is considering using, not a
     /// ping target.

@@ -163,6 +163,45 @@ pub async fn run_l2_helper(endpoint: String) {
                     let _ = send(&writer, &L2Message::ArpPingResponse { id, outcome }).await;
                 });
             }
+            Ok(Some(L2Message::TimestampPingRequest {
+                        id,
+                        source_ip,
+                        target,
+                        vlan,
+                        timeout_ms,
+                    })) => {
+                let (tx, rx) = oneshot::channel();
+                let job = L2Job::TimestampPing {
+                    source_ip,
+                    target,
+                    vlan,
+                    timeout: std::time::Duration::from_millis(timeout_ms as u64),
+                    respond_to: tx,
+                };
+                if job_tx.send(job).await.is_err() {
+                    let _ = send(
+                        &writer,
+                        &L2Message::TimestampPingResponse {
+                            id,
+                            outcome: L2PingOutcomeWire::Error("L2 engine unavailable".to_owned()),
+                        },
+                    )
+                        .await;
+                    continue;
+                }
+                let writer = writer.clone();
+                tokio::spawn(async move {
+                    let outcome = match rx.await {
+                        Ok(L2PingOutcome::Success { rtt }) => L2PingOutcomeWire::Success {
+                            rtt_ms: rtt.as_millis() as u64,
+                        },
+                        Ok(L2PingOutcome::Timeout) => L2PingOutcomeWire::Timeout,
+                        Ok(L2PingOutcome::Error(e)) => L2PingOutcomeWire::Error(e),
+                        Err(_) => L2PingOutcomeWire::Error("engine dropped the request".to_owned()),
+                    };
+                    let _ = send(&writer, &L2Message::TimestampPingResponse { id, outcome }).await;
+                });
+            }
             Ok(Some(L2Message::DuplicateCheckRequest {
                         id,
                         candidate,

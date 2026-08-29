@@ -51,6 +51,9 @@ pub enum L2PingMethod {
     /// to run an IP stack that answers ICMP at all, just to be present on
     /// the segment. See `l2_engine::do_arp_ping`.
     ArpNdp,
+    /// An ICMP Timestamp request/reply (type 13/14) instead of echo -
+    /// IPv4-only, no IPv6 equivalent. See `l2_engine::do_timestamp_ping`.
+    Timestamp,
 }
 
 /// One round's current phase for a pairing - shown as the small colored dot
@@ -339,6 +342,9 @@ async fn run_rounds(
         let outcome = match method {
             L2PingMethod::Icmp => do_ping(&job_tx, source_ip, target, vlan, timeout).await,
             L2PingMethod::ArpNdp => do_arp_ping(&job_tx, source_ip, target, vlan, timeout).await,
+            L2PingMethod::Timestamp => {
+                do_timestamp_ping(&job_tx, source_ip, target, vlan, timeout).await
+            }
         };
 
         if stop_flag.load(Ordering::Relaxed) {
@@ -427,6 +433,31 @@ async fn do_arp_ping(
     let (tx, rx) = oneshot::channel();
     if job_tx
         .send(L2JobRequest::ArpPing {
+            source_ip,
+            target,
+            vlan,
+            timeout,
+            respond_to: tx,
+        })
+        .await
+        .is_err()
+    {
+        return L2PingOutcomeWire::Error("L2 manager unavailable".to_owned());
+    }
+    rx.await
+        .unwrap_or_else(|_| L2PingOutcomeWire::Error("L2 manager dropped the request".to_owned()))
+}
+
+async fn do_timestamp_ping(
+    job_tx: &mpsc::Sender<L2JobRequest>,
+    source_ip: IpAddr,
+    target: IpAddr,
+    vlan: Option<u16>,
+    timeout: Duration,
+) -> L2PingOutcomeWire {
+    let (tx, rx) = oneshot::channel();
+    if job_tx
+        .send(L2JobRequest::TimestampPing {
             source_ip,
             target,
             vlan,
