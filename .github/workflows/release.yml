@@ -1,14 +1,64 @@
 name: Release Build
 
-# This workflow triggers ONLY when you push a tag that starts with 'v' (e.g., v1.0.0)
+# Runs on every push (any branch or tag) so the version check below always
+# runs and catches drift early - but the actual build and release only
+# ever happen for a tag matching 'v*' (e.g. v1.0.0), via the `if:` guards
+# on the build and create_release jobs further down.
 on:
   push:
-    tags:
-      - 'v*'
 
 jobs:
+  # Runs on every push, unlike build/create_release below - nothing else
+  # in the pipeline can run without this having passed first, and it
+  # catches a version mismatch immediately rather than only at release
+  # time (or, previously, only after a full Linux+Windows build cycle).
+  determine_version:
+    name: Determine and validate version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.cargo_version.outputs.version }}
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+        # No lfs: true - this job only reads Cargo.toml and arch/PKGBUILD,
+        # both plain text, not anything git-lfs-tracked.
+
+      - name: Check Cargo.toml version against arch/PKGBUILD
+        id: cargo_version
+        run: |
+          set -euo pipefail
+          CARGO_VERSION=$(grep -m1 '^version' Cargo.toml | sed -E 's/version *= *"([^"]+)".*/\1/' | tr -d '\r' | xargs)
+          PKGBUILD_VERSION=$(grep -m1 '^pkgver=' arch/PKGBUILD | sed -E 's/pkgver=(.*)/\1/' | tr -d '\r' | xargs)
+          echo "Cargo.toml version:   $CARGO_VERSION"
+          echo "arch/PKGBUILD pkgver: $PKGBUILD_VERSION"
+          if [ "$CARGO_VERSION" != "$PKGBUILD_VERSION" ]; then
+            echo "::error::Cargo.toml version ($CARGO_VERSION) does not match arch/PKGBUILD's pkgver ($PKGBUILD_VERSION) - these should stay in sync (see .githooks/pre-commit, which normally keeps this from happening)."
+            exit 1
+          fi
+          echo "version=$CARGO_VERSION" >> "$GITHUB_OUTPUT"
+
+      # Only meaningful once an actual release tag exists to compare
+      # against - a plain branch push has no tag, so this step is skipped
+      # there rather than comparing Cargo.toml against a branch name.
+      - name: Check Cargo.toml version against the pushed tag
+        if: github.ref_type == 'tag' && startsWith(github.ref_name, 'v')
+        run: |
+          set -euo pipefail
+          CARGO_VERSION="${{ steps.cargo_version.outputs.version }}"
+          TAG_VERSION=$(printf '%s' "${GITHUB_REF_NAME#v}" | tr -d '\r' | xargs)
+          echo "Cargo.toml version: $CARGO_VERSION"
+          echo "Git tag version:    $TAG_VERSION"
+          if [ "$CARGO_VERSION" != "$TAG_VERSION" ]; then
+            echo "::error::Cargo.toml version ($CARGO_VERSION) does not match the pushed tag ($GITHUB_REF_NAME) - refusing to build or publish a mismatched release."
+            exit 1
+          fi
+
   build:
     name: Build on ${{ matrix.os }}
+    needs: determine_version
+    # Actual builds only happen for a 'v*' tag push - see the top-level
+    # comment on `on:`. A plain branch push stops after determine_version.
+    if: github.ref_type == 'tag' && startsWith(github.ref_name, 'v')
     runs-on: ${{ matrix.os }}
 
     # Run two jobs in parallel: one on Linux, one on Windows[cite: 2]
@@ -26,7 +76,7 @@ jobs:
       - name: Checkout Source Code
         uses: actions/checkout@v4
         with:
-          # build.rs now decodes ico/statorius-master.png on every build to
+          # build.rs decodes ico/statorius-master.png on every build to
           # generate the app icon - without this, actions/checkout leaves
           # git-lfs-tracked files as their pointer text, not the real PNG,
           # and the build fails immediately.
@@ -53,9 +103,6 @@ jobs:
       - name: Build Release Binary
         run: cargo build --release
 
-      # -----------------------------------------------------
-      # NEW: Install cargo-wix and build the MSI on Windows
-      # -----------------------------------------------------
       - name: Build MSI Installer (Windows)
         if: runner.os == 'Windows'
         run: |
@@ -69,9 +116,6 @@ jobs:
           name: ${{ matrix.artifact_name }}
           path: target/release/${{ matrix.binary_name }}
 
-      # -----------------------------------------------------
-      # NEW: Upload the MSI artifact
-      # -----------------------------------------------------
       - name: Upload MSI Artifact (Windows)
         if: runner.os == 'Windows'
         uses: actions/upload-artifact@v4
@@ -82,7 +126,8 @@ jobs:
   # Once both builds finish, create a GitHub Release and attach the binaries[cite: 2]
   create_release:
     name: Create GitHub Release
-    needs: build
+    needs: [determine_version, build]
+    if: github.ref_type == 'tag' && startsWith(github.ref_name, 'v')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -95,25 +140,14 @@ jobs:
         with:
           path: artifacts
 
-      # -----------------------------------------------------
-      # NEW: Keep arch/PKGBUILD's version in sync with Cargo.toml
-      # instead of hand-maintaining it (this is what let pkgver drift
-      # to 0.4.5 while Cargo.toml had already moved to 0.4.6). Also
-      # fails the release outright if Cargo.toml and the pushed tag
-      # ever disagree, and pins the source tarball checksum for this
-      # exact tag instead of leaving it as 'SKIP'.
-      # -----------------------------------------------------
-      - name: Sync arch/PKGBUILD version with Cargo.toml
+      # Applies the already-validated version into arch/PKGBUILD's text -
+      # pkgver, plus the source tarball's checksum, which can only be
+      # computed here: it has to hash the tag's own archive on GitHub,
+      # which doesn't exist until after the tag is pushed.
+      - name: Update arch/PKGBUILD version and source checksum
         run: |
           set -euo pipefail
-          CARGO_VERSION=$(grep -m1 '^version' Cargo.toml | sed -E 's/version *= *"([^"]+)".*/\1/' | tr -d '\r' | xargs)
-          TAG_VERSION=$(printf '%s' "${GITHUB_REF_NAME#v}" | tr -d '\r' | xargs)
-          echo "Cargo.toml version: $CARGO_VERSION"
-          echo "Git tag version:    $TAG_VERSION"
-          if [ "$CARGO_VERSION" != "$TAG_VERSION" ]; then
-            echo "::error::Cargo.toml version ($CARGO_VERSION) does not match the pushed tag ($GITHUB_REF_NAME) - refusing to publish a mismatched PKGBUILD."
-            exit 1
-          fi
+          CARGO_VERSION="${{ needs.determine_version.outputs.version }}"
 
           sed -i "s/^pkgver=.*/pkgver=${CARGO_VERSION}/" arch/PKGBUILD
 
