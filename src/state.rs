@@ -31,8 +31,7 @@ pub struct PingRequest {
     pub target: IpAddr,
     pub method: PingMethod,
     /// Stop automatically once this many attempts have completed - `None`
-    /// runs until manually stopped (the only behavior before this field
-    /// existed, and still the default from the UI).
+    /// runs until manually stopped, the default from the UI.
     pub count: Option<u32>,
 }
 

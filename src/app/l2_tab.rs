@@ -221,9 +221,9 @@ impl StatoriusApp {
             });
         });
 
-        // Quick-select for VLANs used earlier this run - kept as a row of
-        // buttons rather than a native dropdown widget, to avoid a combo-box
-        // API this session couldn't verify.
+        // Quick-select for VLANs used earlier this run - a row of buttons
+        // rather than a native dropdown, since a plain button avoids
+        // depending on any particular combo-box widget API.
         if !self.known_vlans.is_empty() {
             ui.horizontal(|ui| {
                 ui.weak("recent VLANs:");
@@ -416,7 +416,7 @@ fn render_l2_input_indicator(ui: &mut egui::Ui, validation: &L2InputValidation) 
 
 /// Per-round phase dot for an L2 pinger row: yellow (checking the *source*
 /// IP's duplicateness) / red (duplicate) / teal (ping in flight) / green
-/// (response arrived), as requested. Grey between rounds.
+/// (response arrived). Grey between rounds.
 fn render_l2_phase_indicator(ui: &mut egui::Ui, phase: L2Phase, duplicate_macs: &[String]) {
     let (color, hover): (egui::Color32, String) = match phase {
         L2Phase::Idle => (

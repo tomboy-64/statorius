@@ -60,8 +60,7 @@ pub struct StatoriusApp {
     /// Defaults to `state::DEFAULT_ICMP_PAYLOAD_SIZE` as text.
     ping_icmp_size_input: String,
     /// Stop automatically after this many attempts - empty means
-    /// unlimited (`PingRequest::count: None`), matching the behavior from
-    /// before this field existed.
+    /// unlimited (`PingRequest::count: None`).
     ping_count_input: String,
     tx: mpsc::Sender<WorkerCommand>,
     state: SharedState,
@@ -324,10 +323,9 @@ impl StatoriusApp {
 }
 
 impl eframe::App for StatoriusApp {
-    // eframe 0.35 split the old single `update(ctx, frame)` into an optional
-    // `logic()` (no UI allowed) and this required `ui()`, which is handed the
-    // root viewport's `Ui` directly instead of a `Context`. Panel builders
-    // (`CentralPanel`, `Grid`, `ScrollArea`, ...) now take `&mut Ui` uniformly.
+    // `ui()` is handed the root viewport's `Ui` directly rather than a
+    // `Context`; panel builders (`CentralPanel`, `Grid`, `ScrollArea`, ...)
+    // all take `&mut Ui` uniformly.
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         egui::CentralPanel::default().show(ui, |ui| {
             render_tab_bar(
@@ -351,19 +349,16 @@ impl eframe::App for StatoriusApp {
 
         // The workers update shared state from background tokio tasks with
         // no way to wake the UI directly, so we poll on a steady tick
-        // instead of relying solely on input-driven repaints. `ui.ctx()`
-        // gets us back to the `Context` now that `update`'s `ctx` parameter
-        // is gone.
+        // instead of relying solely on input-driven repaints.
         ui.ctx().request_repaint_after(Duration::from_millis(250));
     }
 }
 
 /// The Ping / L2 Ping tab bar, plus the "L2 mode" activation control
 /// right-aligned in the same row. "L2 Ping" is only selectable once L2 mode
-/// is actually `Active` - not merely theoretically possible - so there's
-/// nothing to show a "not activated yet" message for on the tab itself
-/// anymore (that used to live in `ui_l2_ping_tab`); flipping the checkbox
-/// here is now the only way in or out of that tab being reachable at all.
+/// is actually `Active` - not merely theoretically possible - so flipping
+/// the checkbox here is the only way in or out of that tab being reachable
+/// at all.
 fn render_tab_bar(
     ui: &mut egui::Ui,
     active_tab: &mut ActiveTab,

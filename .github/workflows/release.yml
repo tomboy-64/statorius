@@ -9,9 +9,8 @@ on:
 
 jobs:
   # Runs on every push, unlike build/create_release below - nothing else
-  # in the pipeline can run without this having passed first, and it
-  # catches a version mismatch immediately rather than only at release
-  # time (or, previously, only after a full Linux+Windows build cycle).
+  # in the pipeline can run without this having passed first, so a version
+  # mismatch fails immediately rather than at release time.
   determine_version:
     name: Determine and validate version
     runs-on: ubuntu-latest

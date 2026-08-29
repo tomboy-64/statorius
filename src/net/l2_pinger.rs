@@ -58,8 +58,8 @@ pub enum L2PingMethod {
 
 /// One round's current phase for a pairing - shown as the small colored dot
 /// next to its row: yellow (checking) / red (duplicate) / teal (in flight) /
-/// green (response arrived), as requested. "Duplicate" here means the
-/// *source* IP, not the target.
+/// green (response arrived). "Duplicate" here means the *source* IP, not
+/// the target.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum L2Phase {
     /// Between rounds - just finished sleeping, or hasn't run yet.

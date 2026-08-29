@@ -96,8 +96,7 @@ impl StatoriusApp {
         }
     }
 
-    /// Parses the Count field - empty means unlimited (`None`), matching
-    /// the only behavior that existed before this field did.
+    /// Parses the Count field - empty means unlimited (`None`).
     fn current_ping_count(&self) -> Result<Option<u32>, String> {
         let text = self.ping_count_input.trim();
         if text.is_empty() {

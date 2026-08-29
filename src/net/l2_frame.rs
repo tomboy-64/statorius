@@ -114,11 +114,10 @@ impl InterfaceContext {
 /// address+prefix, gateways) via `default-net`. This is what "which
 /// interface do we actually send raw frames on" comes down to for now - a
 /// future version could let the user pick a specific interface instead of
-/// always using the default one. NOTE: this is the one part of the L2 stack
-/// not verified against the crate's actual source in this session - double
-/// check `default-net`'s exact field/method names here first (particularly
-/// the IPv6 side, added by symmetry with the already-working IPv4 fields,
-/// but not independently confirmed) if this is where a compile error lands.
+/// always using the default one. The IPv6 fields were added by symmetry
+/// with the IPv4 ones below rather than independently confirmed - if a
+/// compile error lands here, check them against `default-net`'s actual
+/// field/method names first.
 pub fn resolve_default_interface() -> Result<InterfaceContext, String> {
     let iface = default_net::get_default_interface()
         .map_err(|e| format!("Could not determine the default network interface: {e}"))?;

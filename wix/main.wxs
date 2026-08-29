@@ -1,16 +1,4 @@
 <?xml version='1.0' encoding='windows-1252'?>
-<!--
-  statorius MSI installer definition.
-
-  NOTE: this file used to be just the Start Menu shortcut fragment below
-  (the <Directory>/<DirectoryRef> block), with no <?xml?> declaration and
-  no wrapping <Wix> root at all - which is exactly what WiX's CNDL0104
-  "multiple root elements" error was pointing at (two top-level elements,
-  neither one a single root). The Product/Package/Directory scaffolding
-  around it here is what actually tells WiX what to build and where to
-  install the exe; without it there was nothing for the shortcut fragment
-  to even attach to.
--->
 <Wix xmlns='http://schemas.microsoft.com/wix/2006/wi'>
 
     <Product
