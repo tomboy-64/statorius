@@ -357,6 +357,9 @@ pub async fn l2_manager_task(
                         // list keeps running in the background.
                         dhcp_state.record(msg);
                     }
+                    Some(L2Message::DhcpSnifferStatus { error }) => {
+                        dhcp_state.set_sniffer_error(error);
+                    }
                     Some(_) => {} // Ready/Failed/Shutdown aren't sent to us here
                     None => {
                         // The reader task ended - the helper disconnected

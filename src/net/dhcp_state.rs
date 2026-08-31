@@ -32,6 +32,11 @@ pub struct DhcpTransaction {
 #[derive(Clone, Default)]
 pub struct DhcpState {
     inner: Arc<Mutex<BTreeMap<u32, DhcpTransaction>>>,
+    /// `L2Message::DhcpSnifferStatus`'s `error`, once it arrives - `None`
+    /// until then (or once it's arrived and reported success). Separate
+    /// from the transaction map since it's a one-shot startup outcome, not
+    /// something that accumulates.
+    sniffer_error: Arc<Mutex<Option<String>>>,
 }
 
 impl DhcpState {
@@ -49,6 +54,19 @@ impl DhcpState {
             messages: Vec::new(),
         });
         entry.messages.push(msg);
+    }
+
+    /// Record the sniffer's startup outcome - `None` means it's genuinely
+    /// listening, `Some(reason)` means it never got going.
+    pub fn set_sniffer_error(&self, error: Option<String>) {
+        *self.sniffer_error.lock().unwrap() = error;
+    }
+
+    /// The sniffer's startup outcome, if it's arrived yet - what the DHCP
+    /// tab checks to show an error banner instead of (or alongside) the
+    /// usual empty-capture message.
+    pub fn sniffer_error(&self) -> Option<String> {
+        self.sniffer_error.lock().unwrap().clone()
     }
 
     /// Every known transaction, oldest exchange first (by its first

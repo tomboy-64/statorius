@@ -91,6 +91,14 @@ pub enum L2Message {
         outcome: L2DuplicateOutcomeWire,
     },
 
+    /// Helper -> GUI: the passive DHCP sniffer (separate from the main L2
+    /// Ready/Failed status above, which only covers the job engine's own
+    /// capture handle) finished starting up. `error: None` means it's
+    /// genuinely listening; `Some(reason)` means it never got going, and
+    /// DHCP capture will show nothing until whatever `reason` describes is
+    /// fixed. Sent exactly once, right alongside `Ready`/`Failed`.
+    DhcpSnifferStatus { error: Option<String> },
+
     /// Helper -> GUI, unsolicited: one DHCP/BOOTP message the helper's
     /// passive sniffer (`dhcp_sniffer`) just captured and decoded. Unlike
     /// every other helper->GUI message above, there's no matching request

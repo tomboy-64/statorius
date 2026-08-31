@@ -59,7 +59,22 @@ pub async fn run_l2_helper(endpoint: String) {
     // (opened, or failed to) by that point - not still resolving the
     // interface/opening pcap on another thread. See `spawn_dhcp_sniffer`'s
     // doc comment for what this closes.
-    let _ = dhcp_ready.await;
+    //
+    // The result itself matters just as much as the timing: a second
+    // concurrent pcap handle on the same adapter (this sniffer's handle,
+    // alongside the job engine's own) isn't guaranteed to be accepted by
+    // every Npcap install/mode - when it isn't, the sniffer thread exits
+    // immediately and DHCP capture silently shows nothing, with L2 mode
+    // otherwise reporting Ready as normal. Relaying whichever outcome this
+    // was is what lets the GUI tell the user why, instead of a silent tab.
+    let dhcp_outcome = match dhcp_ready.await {
+        Ok(result) => result,
+        Err(_) => Err("sniffer thread ended before starting up".to_owned()),
+    };
+    if send(&writer, &L2Message::DhcpSnifferStatus { error: dhcp_outcome.err() }).await.is_err() {
+        eprintln!("l2-helper: failed to report DHCP sniffer status to the GUI");
+        return;
+    }
 
     if send(&writer, &outcome).await.is_err() {
         eprintln!("l2-helper: failed to report status to the GUI");

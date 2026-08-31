@@ -10,7 +10,11 @@
 //! that one is read from inside `l2_engine`'s single-threaded, one-job-at-a-
 //! time loop, and a continuous sniffer has no natural place to yield there.
 //! Two independent capture handles on the same interface is the
-//! straightforward way to let both coexist without one starving the other.
+//! straightforward way to let both coexist without one starving the other -
+//! though if DHCP capture shows nothing while ordinary L2 pings work fine,
+//! a second concurrent handle on the same adapter not being fully supported
+//! by the installed Npcap driver/mode is the prime suspect; see whatever
+//! `L2Message::DhcpSnifferStatus` reports in that case.
 
 use tokio::sync::{mpsc, oneshot};
 
@@ -22,28 +26,37 @@ use super::l2_frame;
 /// pushes decoded messages into, plus a one-shot that fires once the
 /// capture handle has either opened (filter installed or not) or
 /// definitively failed to - whichever happens, DHCP capture has "settled"
-/// at that point and it's safe to tell the GUI L2 mode is ready.
+/// at that point and it's safe to tell the GUI L2 mode is ready. `Ok(())`
+/// means it's genuinely listening; `Err(reason)` means it never got going -
+/// `l2_helper` relays this to the GUI as `L2Message::DhcpSnifferStatus`
+/// specifically so that failure is visible somewhere, rather than only in
+/// a console a built .exe typically doesn't show.
 ///
-/// That second part matters: without it, `l2_helper` could report `Ready`
-/// to the GUI (flipping the checkbox to "Active") while this thread is
-/// still resolving the interface/opening pcap/installing a filter -
-/// letting the user trigger DHCP traffic that arrives before this loop is
-/// actually listening, silently missing the first packet(s) of the
-/// exchange. Call once, from the helper's startup, right alongside
-/// `l2_engine::spawn_engine`.
-pub fn spawn_dhcp_sniffer() -> (mpsc::UnboundedReceiver<DhcpMessageWire>, oneshot::Receiver<()>) {
+/// The signal firing at all matters on its own too, regardless of success
+/// or failure: without it, `l2_helper` could report the main L2 status
+/// `Ready` to the GUI (flipping the checkbox to "Active") while this
+/// thread is still resolving the interface/opening pcap - letting the user
+/// trigger DHCP traffic that arrives before this loop is actually
+/// listening, silently missing the first packet(s) of the exchange. Call
+/// once, from the helper's startup, right alongside `l2_engine::spawn_engine`.
+pub fn spawn_dhcp_sniffer() -> (
+    mpsc::UnboundedReceiver<DhcpMessageWire>,
+    oneshot::Receiver<Result<(), String>>,
+) {
     let (tx, rx) = mpsc::unbounded_channel();
     let (ready_tx, ready_rx) = oneshot::channel();
     tokio::task::spawn_blocking(move || sniffer_loop(tx, ready_tx));
     (rx, ready_rx)
 }
 
-fn sniffer_loop(tx: mpsc::UnboundedSender<DhcpMessageWire>, ready_tx: oneshot::Sender<()>) {
+fn sniffer_loop(
+    tx: mpsc::UnboundedSender<DhcpMessageWire>,
+    ready_tx: oneshot::Sender<Result<(), String>>,
+) {
     let ctx = match l2_frame::resolve_default_interface() {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("dhcp-sniffer: no usable interface, not starting: {e}");
-            let _ = ready_tx.send(());
+            let _ = ready_tx.send(Err(format!("no usable interface: {e}")));
             return;
         }
     };
@@ -51,8 +64,7 @@ fn sniffer_loop(tx: mpsc::UnboundedSender<DhcpMessageWire>, ready_tx: oneshot::S
     let mut cap = match open_capture(&ctx) {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("dhcp-sniffer: failed to open '{}': {e}", ctx.name);
-            let _ = ready_tx.send(());
+            let _ = ready_tx.send(Err(format!("failed to open '{}': {e}", ctx.name)));
             return;
         }
     };
@@ -61,7 +73,7 @@ fn sniffer_loop(tx: mpsc::UnboundedSender<DhcpMessageWire>, ready_tx: oneshot::S
     // (avoids handing every non-DHCP packet on the wire to userspace just
     // to be immediately dropped by `decode_frame` below) - if it can't be
     // set for some reason, fall back to filtering in software instead of
-    // giving up on DHCP capture entirely.
+    // giving up on DHCP capture entirely. Not treated as a startup failure.
     if let Err(e) = cap.filter("udp and (port 67 or port 68)", true) {
         eprintln!(
             "dhcp-sniffer: couldn't install a capture filter ({e}), \
@@ -69,11 +81,10 @@ fn sniffer_loop(tx: mpsc::UnboundedSender<DhcpMessageWire>, ready_tx: oneshot::S
         );
     }
 
-    // The handle is open and the filter (if any) is installed - genuinely
-    // ready to capture from here on. The receiving end being gone (the
-    // helper already shut down) just means there's no one left to signal;
-    // not this thread's problem to handle.
-    let _ = ready_tx.send(());
+    // The handle is open - genuinely ready to capture from here on. The
+    // receiving end being gone (the helper already shut down) just means
+    // there's no one left to signal; not this thread's problem to handle.
+    let _ = ready_tx.send(Ok(()));
 
     loop {
         match cap.next_packet() {

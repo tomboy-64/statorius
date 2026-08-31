@@ -25,6 +25,18 @@ impl StatoriusApp {
 
         let transactions = self.dhcp_state.snapshot();
 
+        if let Some(error) = self.dhcp_state.sniffer_error() {
+            ui.colored_label(
+                egui::Color32::from_rgb(220, 80, 80),
+                format!("DHCP capture isn't running: {error}"),
+            );
+            ui.weak(
+                "L2 pinging and other L2 features are unaffected - this only \
+                 affects the DHCP tab specifically.",
+            );
+            ui.separator();
+        }
+
         ui.horizontal(|ui| {
             ui.heading("DHCP Exchanges");
             ui.weak(format!("({} transaction(s) seen)", transactions.len()));
