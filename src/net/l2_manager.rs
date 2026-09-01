@@ -276,7 +276,7 @@ pub async fn l2_manager_task(
                             continue;
                         }
                         status.set(L2Status::Starting);
-                        match start_session(&readiness).await {
+                        match start_session(&readiness, &dhcp_state).await {
                             Ok((sess, events, detail)) => {
                                 status.set(L2Status::Active { detail });
                                 session = Some(sess);
@@ -382,6 +382,7 @@ pub async fn l2_manager_task(
 
 async fn start_session(
     readiness: &L2Readiness,
+    dhcp_state: &DhcpState,
 ) -> Result<(L2Session, mpsc::Receiver<L2Message>, String), String> {
     let endpoint = l2_ipc::endpoint_name();
     let exe =
@@ -437,18 +438,28 @@ async fn start_session(
     let (read_half, write_half) = tokio::io::split(stream);
     let mut reader = BufReader::new(read_half);
 
-    let handshake = tokio::time::timeout(HANDSHAKE_TIMEOUT, l2_ipc::recv_message(&mut reader))
-        .await
-        .map_err(|_| "Timed out waiting for the L2 helper's status.".to_owned())?
-        .map_err(|e| format!("IPC error waiting for status: {e}"))?;
-
-    let detail = match handshake {
-        Some(L2Message::Ready { detail }) => detail,
-        Some(L2Message::Failed { reason }) => return Err(reason),
-        Some(_) | None => {
-            return Err("The L2 helper disconnected before reporting status.".to_owned())
+    // The helper sends `DhcpSnifferStatus` before its actual Ready/Failed
+    // message (see l2_helper.rs) - deliberately, so the DHCP tab's error
+    // banner is already populated by the moment L2 mode reports Active -
+    // so this has to tolerate (and record) that extra message rather than
+    // treating anything but Ready/Failed as a fatal disconnect.
+    let detail = tokio::time::timeout(HANDSHAKE_TIMEOUT, async {
+        loop {
+            match l2_ipc::recv_message(&mut reader).await {
+                Ok(Some(L2Message::Ready { detail })) => return Ok(detail),
+                Ok(Some(L2Message::Failed { reason })) => return Err(reason),
+                Ok(Some(L2Message::DhcpSnifferStatus { error })) => {
+                    dhcp_state.set_sniffer_error(error);
+                }
+                Ok(Some(_)) | Ok(None) => {
+                    return Err("The L2 helper disconnected before reporting status.".to_owned());
+                }
+                Err(e) => return Err(format!("IPC error waiting for status: {e}")),
+            }
         }
-    };
+    })
+        .await
+        .map_err(|_| "Timed out waiting for the L2 helper's status.".to_owned())??;
 
     // From here on, a dedicated task owns the read half and just forwards
     // every subsequent message into a plain channel. This is what lets the
