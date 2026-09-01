@@ -39,6 +39,18 @@ prepare() {
     # would otherwise leave these as pointer text instead of real PNGs.
     # `--local` scopes the filter registration to just this repo copy.
     git lfs install --local
+
+    # makepkg clones this working copy from its own local mirror cache
+    # (a file:// path next to this PKGBUILD, kept around so repeat builds
+    # don't re-clone from GitHub every time) rather than from GitHub
+    # directly - so `origin` right now points at that local mirror. LFS
+    # object *content* only ever lives on GitHub's LFS storage, never in
+    # that mirror (a plain git clone only ever copies the pointer text,
+    # the same reason build.rs needs lfs:true in CI - see release.yml),
+    # so `git lfs pull` needs `origin` pointed at the real repo first or
+    # it fails trying to fetch objects from a local path that never had
+    # them. Keep this URL in sync with the one in source= above.
+    git remote set-url origin "https://github.com/tomboy-64/${_pkgname}.git"
     git lfs pull
 }
 
