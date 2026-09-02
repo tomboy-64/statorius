@@ -17,6 +17,7 @@ use tokio::sync::{oneshot, Mutex};
 use super::dhcp_sniffer;
 use super::l2::try_open_promiscuous_probe;
 use super::l2_engine::{self, L2DuplicateOutcome, L2Job, L2PingOutcome};
+use super::l2_frame;
 use super::l2_ipc::{self, L2DuplicateOutcomeWire, L2Message, L2PingOutcomeWire};
 
 pub async fn run_l2_helper(endpoint: String) {
@@ -44,6 +45,30 @@ pub async fn run_l2_helper(endpoint: String) {
         Ok(detail) => L2Message::Ready { detail },
         Err(reason) => L2Message::Failed { reason },
     };
+
+    // That probe deliberately prefers loopback (or, failing that, whichever
+    // device happens to open first) purely to answer "is raw capture
+    // possible here at all" without disturbing real traffic - it does not
+    // confirm the *specific* interface real jobs will actually use. Confirm
+    // that too, with the exact same resolve+open real jobs do, before ever
+    // reporting Ready: succeeding on loopback while the real interface
+    // can't be opened at all would otherwise show L2 mode as green while
+    // every actual ping/ARP job (and the DHCP sniffer) fails behind it.
+    let outcome = match outcome {
+        L2Message::Ready { detail } => match l2_frame::resolve_default_interface()
+            .and_then(|ctx| l2_engine::open_capture(&ctx).map_err(|e| e.to_string()))
+        {
+            Ok(_capture) => L2Message::Ready { detail },
+            Err(e) => L2Message::Failed {
+                reason: format!(
+                    "The default network interface itself couldn't be opened, even though a \
+                     general capture probe otherwise succeeded ({detail}): {e}"
+                ),
+            },
+        },
+        failed => failed,
+    };
+
     let ready = matches!(outcome, L2Message::Ready { .. });
     if !ready {
         let _ = send(&writer, &outcome).await;

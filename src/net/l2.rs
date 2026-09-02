@@ -114,11 +114,32 @@ enum FindResult {
 /// flags. First success wins; if every candidate fails, report the last
 /// failure (as good a representative as any of "what's actually wrong
 /// here").
+///
+/// One thing flags-based pre-filtering *was* accidentally doing for free:
+/// keeping this away from Linux's non-Ethernet pcap pseudo-devices
+/// (`bluetooth0`, `nflog`, `nfqueue`, `usbmon0`, `dbus-system`, the `any`
+/// meta-device, ...). Those are real entries in `Device::list()`, but
+/// they're captured through an entirely different kernel mechanism than
+/// `AF_PACKET` (Bluetooth HCI monitoring, netfilter logging, USB
+/// monitoring, ...), so opening one proves nothing about whether this
+/// process can do genuine raw Ethernet capture - on a fully unprivileged
+/// process with zero capabilities, `bluetooth0` opened here without error,
+/// while the real interface right behind it in the device list failed
+/// outright. Excluded by name below rather than by flags, since there's no
+/// structured "this is a real Ethernet-style interface" flag to check.
+const NON_ETHERNET_PSEUDO_DEVICE_PREFIXES: &[&str] =
+    &["bluetooth", "nflog", "nfqueue", "usbmon", "dbus-", "any"];
+
 fn find_probe_target_and_test() -> FindResult {
     let mut devices = match Device::list() {
         Ok(d) => d,
         Err(e) => return FindResult::NoDevices(e),
     };
+    devices.retain(|d| {
+        !NON_ETHERNET_PSEUDO_DEVICE_PREFIXES
+            .iter()
+            .any(|prefix| d.name.starts_with(prefix))
+    });
     if devices.is_empty() {
         return FindResult::NoUsableDevice;
     }
