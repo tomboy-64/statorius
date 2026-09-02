@@ -13,9 +13,9 @@ strip = true        # Automatically strips symbols from the binary
 [dependencies]
 eframe = "0.36.1" # GUI framework
 tokio = { version = "1.53.1", features = ["full"] } # Async runtime
-surge-ping = "0.9" # Async ICMP
+surge-ping = "0.9.0" # Async ICMP
 # Useful for retrieving local IPs
-default-net = "0.22"
+default-net = "0.22.0"
 # L2 capability probing now, raw Ethernet frame capture/injection later
 # (Npcap on Windows, libpcap on Linux)
 pcap = "2.5.0"
@@ -27,12 +27,12 @@ async-trait = "0.1.92"
 # Windows even though we never call into it - our own L2 engine does its own
 # capture via the `pcap` crate above. pnet_packet alone is pure Rust with no
 # native linking at all, so it can't cause this class of problem.
-pnet_packet = "0.35"
+pnet_packet = "0.35.0"
 # MacAddr itself lives here, not in pnet_packet::util (that module is just
 # checksum helpers) - pnet_packet depends on pnet_base internally but
 # doesn't re-export it, so we need it directly too. Also pure Rust, no
 # native linking.
-pnet_base = "0.35"
+pnet_base = "0.35.0"
 
 # System DNS server discovery (resolv.conf on Linux, registry on Windows)
 # plus A/AAAA resolution with CNAME chasing, for the "DNS Servers" tab and
@@ -48,7 +48,7 @@ windows-sys = "0.61.2"
 # Windows-only: ShellExecuteW's "runas" verb, to UAC-elevate the L2 helper
 [target.'cfg(windows)'.dependencies]
 windows-sys = {
-    version = "0.61",
+    version = "0",
     features = [
         "Win32_Foundation",
         "Win32_UI_Shell",
@@ -77,5 +77,5 @@ windows-sys = {
 # unconditionally and no-op'ing at runtime instead (its own documented
 # pattern) works on every host/target combination.
 [build-dependencies]
-image = { version = "0.25", default-features = false, features = ["png", "ico"] }
-winresource = "0.1"
+image = { version = "0.25.10", default-features = false, features = ["png", "ico"] }
+winresource = "0.1.31"
