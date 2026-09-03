@@ -1,6 +1,6 @@
 [package]
 name = "statorius"
-version = "0.7.11"
+version = "0.7.12"
 edition = "2024"
 license = "AGPL-3.0-only"
 
@@ -48,7 +48,7 @@ windows-sys = "0.61.2"
 # Windows-only: ShellExecuteW's "runas" verb, to UAC-elevate the L2 helper
 [target.'cfg(windows)'.dependencies]
 windows-sys = {
-    version = "0",
+    version = "0.61.2",
     features = [
         "Win32_Foundation",
         "Win32_UI_Shell",
