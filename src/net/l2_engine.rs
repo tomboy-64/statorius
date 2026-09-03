@@ -108,30 +108,35 @@ pub enum L2DuplicateOutcome {
     Error(String),
 }
 
-/// Start the engine on its own blocking OS thread and return the channel to
-/// send jobs to it. Call once, from the helper process's startup.
-pub fn spawn_engine() -> mpsc::Sender<L2Job> {
+/// Start the engine on its own blocking OS thread against the given
+/// (already-resolved) interface. Returns the channel to send jobs to, plus
+/// a one-shot that fires once the capture handle has either opened or
+/// definitively failed to - `l2_helper` waits for this to settle before
+/// doing anything else downstream (dispatching jobs, starting the DHCP
+/// sniffer's own handle on the same interface). Call once, from the helper
+/// process's startup.
+pub fn spawn_engine(
+    ctx: InterfaceContext,
+) -> (mpsc::Sender<L2Job>, oneshot::Receiver<Result<(), String>>) {
     let (tx, rx) = mpsc::channel::<L2Job>(64);
-    tokio::task::spawn_blocking(move || engine_loop(rx));
-    tx
+    let (ready_tx, ready_rx) = oneshot::channel();
+    tokio::task::spawn_blocking(move || engine_loop(ctx, rx, ready_tx));
+    (tx, ready_rx)
 }
 
-fn engine_loop(mut rx: mpsc::Receiver<L2Job>) {
-    let ctx = match l2_frame::resolve_default_interface() {
-        Ok(c) => c,
-        Err(e) => {
-            drain_with_error(&mut rx, format!("No usable network interface: {e}"));
-            return;
-        }
-    };
-
+fn engine_loop(
+    ctx: InterfaceContext,
+    mut rx: mpsc::Receiver<L2Job>,
+    ready_tx: oneshot::Sender<Result<(), String>>,
+) {
     let mut cap = match open_capture(&ctx) {
         Ok(c) => c,
         Err(e) => {
-            drain_with_error(&mut rx, format!("Failed to open '{}': {e}", ctx.name));
+            let _ = ready_tx.send(Err(format!("failed to open '{}': {e}", ctx.name)));
             return;
         }
     };
+    let _ = ready_tx.send(Ok(()));
 
     // IP -> MAC, so a continuously-pinged target doesn't need a fresh
     // ARP/NDP resolution every single round. Shared across both address
@@ -201,25 +206,6 @@ fn engine_loop(mut rx: mpsc::Receiver<L2Job>) {
             } => {
                 let outcome = do_duplicate_check(&mut cap, &ctx, candidate, vlan, timeout);
                 let _ = respond_to.send(outcome);
-            }
-        }
-    }
-}
-
-fn drain_with_error(rx: &mut mpsc::Receiver<L2Job>, message: String) {
-    while let Some(job) = rx.blocking_recv() {
-        match job {
-            L2Job::Ping { respond_to, .. } => {
-                let _ = respond_to.send(L2PingOutcome::Error(message.clone()));
-            }
-            L2Job::ArpPing { respond_to, .. } => {
-                let _ = respond_to.send(L2PingOutcome::Error(message.clone()));
-            }
-            L2Job::TimestampPing { respond_to, .. } => {
-                let _ = respond_to.send(L2PingOutcome::Error(message.clone()));
-            }
-            L2Job::CheckDuplicate { respond_to, .. } => {
-                let _ = respond_to.send(L2DuplicateOutcome::Error(message.clone()));
             }
         }
     }

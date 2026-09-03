@@ -9,58 +9,44 @@
 //! never the *same* handle the job engine uses for Ping/CheckDuplicate:
 //! that one is read from inside `l2_engine`'s single-threaded, one-job-at-a-
 //! time loop, and a continuous sniffer has no natural place to yield there.
-//! Two independent capture handles on the same interface is the
-//! straightforward way to let both coexist without one starving the other -
-//! though if DHCP capture shows nothing while ordinary L2 pings work fine,
-//! a second concurrent handle on the same adapter not being fully supported
-//! by the installed Npcap driver/mode is the prime suspect; see whatever
-//! `L2Message::DhcpSnifferStatus` reports in that case.
 
 use tokio::sync::{mpsc, oneshot};
 
 use super::dhcp::{self, DhcpMessageWire};
 use super::l2_engine::open_capture;
-use super::l2_frame;
+use super::l2_frame::{self, InterfaceContext};
 
-/// Start the sniffer on its own blocking OS thread. Returns the channel it
-/// pushes decoded messages into, plus a one-shot that fires once the
-/// capture handle has either opened (filter installed or not) or
-/// definitively failed to - whichever happens, DHCP capture has "settled"
-/// at that point and it's safe to tell the GUI L2 mode is ready. `Ok(())`
-/// means it's genuinely listening; `Err(reason)` means it never got going -
-/// `l2_helper` relays this to the GUI as `L2Message::DhcpSnifferStatus`
-/// specifically so that failure is visible somewhere, rather than only in
-/// a console a built .exe typically doesn't show.
+/// Start the sniffer on its own blocking OS thread against `ctx` - the same
+/// interface the job engine's own handle already opened. Returns the
+/// channel it pushes decoded messages into, plus a one-shot that fires once
+/// this capture handle has either opened or definitively failed to.
+/// `Ok(())` means it's genuinely listening; `Err(reason)` means it never
+/// got going - `l2_helper` relays this to the GUI as
+/// `L2Message::DhcpSnifferStatus` specifically so that failure is visible
+/// somewhere, rather than only in a console a built .exe typically doesn't
+/// show.
 ///
-/// The signal firing at all matters on its own too, regardless of success
-/// or failure: without it, `l2_helper` could report the main L2 status
-/// `Ready` to the GUI (flipping the checkbox to "Active") while this
-/// thread is still resolving the interface/opening pcap - letting the user
-/// trigger DHCP traffic that arrives before this loop is actually
-/// listening, silently missing the first packet(s) of the exchange. Call
-/// once, from the helper's startup, right alongside `l2_engine::spawn_engine`.
-pub fn spawn_dhcp_sniffer() -> (
+/// Call only after the job engine's own handle has already opened
+/// successfully (see `l2_engine::spawn_engine`) - never concurrently with
+/// it. Two capture handles opening on the same interface at the same
+/// moment isn't something every platform's capture driver handles cleanly.
+pub fn spawn_dhcp_sniffer(
+    ctx: InterfaceContext,
+) -> (
     mpsc::UnboundedReceiver<DhcpMessageWire>,
     oneshot::Receiver<Result<(), String>>,
 ) {
     let (tx, rx) = mpsc::unbounded_channel();
     let (ready_tx, ready_rx) = oneshot::channel();
-    tokio::task::spawn_blocking(move || sniffer_loop(tx, ready_tx));
+    tokio::task::spawn_blocking(move || sniffer_loop(ctx, tx, ready_tx));
     (rx, ready_rx)
 }
 
 fn sniffer_loop(
+    ctx: InterfaceContext,
     tx: mpsc::UnboundedSender<DhcpMessageWire>,
     ready_tx: oneshot::Sender<Result<(), String>>,
 ) {
-    let ctx = match l2_frame::resolve_default_interface() {
-        Ok(c) => c,
-        Err(e) => {
-            let _ = ready_tx.send(Err(format!("no usable interface: {e}")));
-            return;
-        }
-    };
-
     let mut cap = match open_capture(&ctx) {
         Ok(c) => c,
         Err(e) => {

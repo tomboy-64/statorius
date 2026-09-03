@@ -1,9 +1,10 @@
 //! The elevated L2 helper process. When the binary is invoked with
 //! `--l2-helper <endpoint>`, `main()` runs this instead of the GUI: connect
-//! back to the GUI over the local IPC endpoint, confirm L2 capability now
-//! that we're (hopefully) elevated, start the job engine and the passive
-//! DHCP sniffer, and then relay Ping/ArpPing/DuplicateCheck requests (and
-//! stream captured DHCP messages) until told to shut down.
+//! back to the GUI over the local IPC endpoint, resolve the default
+//! interface, bring up the job engine and the passive DHCP sniffer on it
+//! (strictly in that order - see below), and then relay Ping/ArpPing/
+//! DuplicateCheck requests (and stream captured DHCP messages) until told
+//! to shut down.
 //!
 //! This is deliberately the *only* code path in the whole binary that ever
 //! runs elevated - the GUI process, `state`, and everything the UI touches
@@ -15,7 +16,6 @@ use tokio::io::{AsyncWrite, BufReader};
 use tokio::sync::{oneshot, Mutex};
 
 use super::dhcp_sniffer;
-use super::l2::try_open_promiscuous_probe;
 use super::l2_engine::{self, L2DuplicateOutcome, L2Job, L2PingOutcome};
 use super::l2_frame;
 use super::l2_ipc::{self, L2DuplicateOutcomeWire, L2Message, L2PingOutcomeWire};
@@ -37,61 +37,39 @@ pub async fn run_l2_helper(endpoint: String) {
     let mut reader = BufReader::new(read_half);
     let writer = Arc::new(Mutex::new(write_half));
 
-    // The exact same probe that failed unprivileged should succeed now that
-    // we're elevated. If it still doesn't, something's genuinely wrong (not
-    // just "needs elevation"), and we report that honestly rather than
-    // pretending to be ready.
-    let outcome = match try_open_promiscuous_probe() {
-        Ok(detail) => L2Message::Ready { detail },
-        Err(reason) => L2Message::Failed { reason },
+    let ctx = match l2_frame::resolve_default_interface() {
+        Ok(ctx) => ctx,
+        Err(e) => {
+            let _ = send(
+                &writer,
+                &L2Message::Failed {
+                    reason: format!("No usable network interface: {e}"),
+                },
+            )
+                .await;
+            return;
+        }
     };
 
-    // That probe deliberately prefers loopback (or, failing that, whichever
-    // device happens to open first) purely to answer "is raw capture
-    // possible here at all" without disturbing real traffic - it does not
-    // confirm the *specific* interface real jobs will actually use. Confirm
-    // that too, with the exact same resolve+open real jobs do, before ever
-    // reporting Ready: succeeding on loopback while the real interface
-    // can't be opened at all would otherwise show L2 mode as green while
-    // every actual ping/ARP job (and the DHCP sniffer) fails behind it.
-    let outcome = match outcome {
-        L2Message::Ready { detail } => match l2_frame::resolve_default_interface()
-            .and_then(|ctx| l2_engine::open_capture(&ctx).map_err(|e| e.to_string()))
-        {
-            Ok(_capture) => L2Message::Ready { detail },
-            Err(e) => L2Message::Failed {
-                reason: format!(
-                    "The default network interface itself couldn't be opened, even though a \
-                     general capture probe otherwise succeeded ({detail}): {e}"
-                ),
-            },
-        },
-        failed => failed,
+    // The job engine's capture handle is the definitive test of whether
+    // elevation actually got us raw access to this interface - opened and
+    // awaited to completion *before* anything else touches the interface,
+    // so there's never a moment where two capture handles are racing to
+    // open the same device (some platforms' capture drivers don't tolerate
+    // that cleanly).
+    let (job_tx, engine_ready) = l2_engine::spawn_engine(ctx.clone());
+    let engine_result = match engine_ready.await {
+        Ok(result) => result,
+        Err(_) => Err("engine thread ended before starting up".to_owned()),
     };
-
-    let ready = matches!(outcome, L2Message::Ready { .. });
-    if !ready {
-        let _ = send(&writer, &outcome).await;
+    if let Err(reason) = engine_result {
+        let _ = send(&writer, &L2Message::Failed { reason }).await;
         return;
     }
 
-    let job_tx = l2_engine::spawn_engine();
-    let (mut dhcp_rx, dhcp_ready) = dhcp_sniffer::spawn_dhcp_sniffer();
-
-    // Deliberately block *before* telling the GUI L2 mode is ready: the
-    // checkbox flipping to "Active" is the user's cue that it's now safe
-    // to generate traffic, so DHCP capture needs to have actually settled
-    // (opened, or failed to) by that point - not still resolving the
-    // interface/opening pcap on another thread. See `spawn_dhcp_sniffer`'s
-    // doc comment for what this closes.
-    //
-    // The result itself matters just as much as the timing: a second
-    // concurrent pcap handle on the same adapter (this sniffer's handle,
-    // alongside the job engine's own) isn't guaranteed to be accepted by
-    // every Npcap install/mode - when it isn't, the sniffer thread exits
-    // immediately and DHCP capture silently shows nothing, with L2 mode
-    // otherwise reporting Ready as normal. Relaying whichever outcome this
-    // was is what lets the GUI tell the user why, instead of a silent tab.
+    // Only now - with the engine's handle already open - does the DHCP
+    // sniffer open its own, independent handle on the same interface.
+    let (mut dhcp_rx, dhcp_ready) = dhcp_sniffer::spawn_dhcp_sniffer(ctx.clone());
     let dhcp_outcome = match dhcp_ready.await {
         Ok(result) => result,
         Err(_) => Err("sniffer thread ended before starting up".to_owned()),
@@ -101,7 +79,8 @@ pub async fn run_l2_helper(endpoint: String) {
         return;
     }
 
-    if send(&writer, &outcome).await.is_err() {
+    let detail = format!("Opened '{}' in promiscuous mode.", ctx.name);
+    if send(&writer, &L2Message::Ready { detail }).await.is_err() {
         eprintln!("l2-helper: failed to report status to the GUI");
         return;
     }
