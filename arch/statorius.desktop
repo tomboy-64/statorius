@@ -5,6 +5,6 @@ Comment=A networking toolbox
 # The command to run your app. %U allows passing URLs/files if needed.
 Exec=/usr/bin/statorius %U
 # The name of the icon file (without the extension) located in /usr/share/pixmaps or /usr/share/icons
-#Icon=your-app-name
+Icon=statorius.png
 Terminal=false
 Categories=Utility;Development; # Adjust these to dictate which menu folder it goes into
