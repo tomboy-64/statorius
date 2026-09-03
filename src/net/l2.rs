@@ -66,24 +66,6 @@ pub fn probe_l2_readiness() -> L2Readiness {
     }
 }
 
-/// Re-run just the promiscuous-open check, without the "is this fixable by
-/// elevation" classification. Used by the elevated helper, which only needs
-/// to know whether it can actually do the work *now*.
-pub fn try_open_promiscuous_probe() -> Result<String, String> {
-    match find_probe_target_and_test() {
-        FindResult::NoDevices(e) => Err(format!("Could not enumerate network devices: {e}")),
-        FindResult::NoUsableDevice => Err("pcap reported zero network devices on this system.".to_owned()),
-        FindResult::Probed {
-            name,
-            result: Ok(()),
-        } => Ok(format!("Verified: opened '{name}' in promiscuous mode.")),
-        FindResult::Probed {
-            name,
-            result: Err(e),
-        } => Err(format!("Opening '{name}' in promiscuous mode failed: {e}")),
-    }
-}
-
 enum FindResult {
     NoDevices(pcap::Error),
     NoUsableDevice,
