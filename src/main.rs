@@ -110,6 +110,13 @@ async fn main() -> eframe::Result<()> {
     let mut options = eframe::NativeOptions::default();
     options.viewport = options.viewport.with_icon(icon_data.clone());
 
+    // Windows and Linux: left to its own devices, wgpu's automatic backend
+    // choice causes visible whole-window flicker on some machines (seen with
+    // DX12 on Windows). Preference order: Vulkan, then OpenGL, then
+    // everything else (DX12 included). macOS keeps the default (Metal).
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    prefer_backends(&mut options);
+
     eframe::run_native(
         "Statorius",
         options,
@@ -143,4 +150,63 @@ async fn main() -> eframe::Result<()> {
             )))
         }),
     )
+}
+
+/// Makes wgpu prefer Vulkan, then OpenGL, over every other backend (DX12 in
+/// particular) on Windows and Linux - see the call site.
+///
+/// Deliberately a *preference*, not a hard `backends = ...` restriction: on a
+/// machine where neither Vulkan nor OpenGL works (some VMs, RDP sessions,
+/// very old GPUs) the app then still starts on whatever is left instead of
+/// failing with "no adapter found". An explicit `WGPU_BACKEND` environment
+/// variable still wins - if it is set, the selection is left entirely to
+/// wgpu/egui-wgpu as before, so the backend can still be overridden for
+/// troubleshooting.
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+fn prefer_backends(options: &mut eframe::NativeOptions) {
+    use eframe::egui_wgpu::WgpuSetup;
+    use eframe::wgpu;
+    use std::sync::Arc;
+
+    if wgpu::Backends::from_env().is_some() {
+        return;
+    }
+    if let WgpuSetup::CreateNew(setup) = &mut options.wgpu_options.wgpu_setup {
+        setup.native_adapter_selector = Some(Arc::new(select_adapter));
+    }
+}
+
+/// Adapter choice used by `prefer_backends`: only adapters that can present
+/// to the window are considered; the backend decides first (Vulkan, then
+/// OpenGL, then anything else), and within a backend a discrete GPU beats an
+/// integrated one, then virtual, other, and finally software (CPU) adapters -
+/// the same ordering the default high-performance preference would give.
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+fn select_adapter(
+    adapters: &[eframe::wgpu::Adapter],
+    surface: Option<&eframe::wgpu::Surface<'_>>,
+) -> Result<eframe::wgpu::Adapter, String> {
+    use eframe::wgpu::{Backend, DeviceType};
+
+    adapters
+        .iter()
+        .filter(|a| surface.map_or(true, |s| a.is_surface_supported(s)))
+        .min_by_key(|a| {
+            let info = a.get_info();
+            let backend_rank = match info.backend {
+                Backend::Vulkan => 0,
+                Backend::Gl => 1,
+                _ => 2,
+            };
+            let device_rank = match info.device_type {
+                DeviceType::DiscreteGpu => 0,
+                DeviceType::IntegratedGpu => 1,
+                DeviceType::VirtualGpu => 2,
+                DeviceType::Other => 3,
+                DeviceType::Cpu => 4,
+            };
+            (backend_rank, device_rank)
+        })
+        .cloned()
+        .ok_or_else(|| "No graphics adapter can present to the window".to_owned())
 }
