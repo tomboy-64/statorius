@@ -43,6 +43,30 @@ pub(super) fn render_since_indicator(ui: &mut egui::Ui, last_updated: &Option<In
     }
 }
 
+/// Ping-tab variant of the "Since" timer that never goes blank: once a
+/// response has been recorded it behaves exactly like
+/// `render_since_indicator`; until then it counts up from `started_at` (when
+/// pinging began) and appends a `*` to flag that nothing has answered yet.
+/// The `*` disappears by itself the moment `last_updated` becomes `Some`.
+/// Backend-agnostic - ICMP, TCP and UDP all feed the same
+/// `last_updated`/`started_at` pair. (The L2 list keeps using the plain
+/// version above.)
+pub(super) fn render_since_indicator_pending(
+    ui: &mut egui::Ui,
+    last_updated: &Option<Instant>,
+    started_at: Instant,
+) {
+    match last_updated {
+        Some(instant) => {
+            ui.label(format_elapsed(instant.elapsed()));
+        }
+        None => {
+            ui.label(format!("{}*", format_elapsed(started_at.elapsed())))
+                .on_hover_text("No response yet - counting since pinging started");
+        }
+    }
+}
+
 /// Renders a `Duration` as "Ns ago" / "Nm Ns ago" / "Nh Nm ago", truncated to
 /// whole seconds - matches the second-precision the "Since" column asks for.
 fn format_elapsed(elapsed: Duration) -> String {

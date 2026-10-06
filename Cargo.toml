@@ -1,6 +1,6 @@
 [package]
 name = "statorius"
-version = "0.7.12"
+version = "0.7.13"
 edition = "2024"
 license = "AGPL-3.0-only"
 
@@ -11,9 +11,9 @@ panic = "abort"     # Removes stack unwinding code (saves a lot of space)
 strip = true        # Automatically strips symbols from the binary
 
 [dependencies]
-eframe = "0.36.1" # GUI framework
-tokio = { version = "1.53.1", features = ["full"] } # Async runtime
-surge-ping = "0.9.0" # Async ICMP
+eframe = "0.36.2" # GUI framework
+tokio = { version = "1.53.2", features = ["full"] } # Async runtime
+surge-ping = "0.9.1" # Async ICMP
 # Useful for retrieving local IPs
 default-net = "0.22.0"
 # L2 capability probing now, raw Ethernet frame capture/injection later
@@ -38,7 +38,7 @@ pnet_base = "0.35.0"
 # plus A/AAAA resolution with CNAME chasing, for the "DNS Servers" tab and
 # hostname resolution on the Ping tab. Default features ("system-config" +
 # "tokio") are exactly what's needed here - no TLS/DoH/DNSSEC extras.
-hickory-resolver = "0.26.1"
+hickory-resolver = "0.26.3"
 
 # Wire format for the GUI <-> elevated L2 helper IPC protocol
 serde = { version = "1.0.229", features = ["derive"] }

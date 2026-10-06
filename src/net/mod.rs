@@ -86,7 +86,12 @@ pub async fn ping_worker(mut rx: mpsc::Receiver<WorkerCommand>, state: SharedSta
                     let _ = old.task.await;
                 }
 
-                state.ensure_target(target, request.method.clone(), request.count);
+                state.ensure_target(
+                    target,
+                    request.method.clone(),
+                    request.count,
+                    request.label.clone(),
+                );
                 state.set_running(target, true);
 
                 let ident = next_ident;

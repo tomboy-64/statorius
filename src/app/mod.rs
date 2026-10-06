@@ -9,7 +9,7 @@ use crate::net::l2::L2Readiness;
 use crate::net::l2_ipc::L2DuplicateOutcomeWire;
 use crate::net::l2_manager::{L2Command, L2JobRequest, L2Status, SharedL2Status};
 use crate::net::l2_pinger::{L2PingMethod, L2PingerCommand, L2PingerState};
-use crate::state::{SharedState, WorkerCommand};
+use crate::state::{PingMethod, SharedState, WorkerCommand};
 use hickory_resolver::proto::rr::RecordType;
 
 mod about_tab;
@@ -155,6 +155,10 @@ pub struct StatoriusApp {
     /// The exact text that was submitted for the in-flight lookup above -
     /// used to attribute the reply (success or failure) back to it.
     dns_resolve_target: String,
+    /// Method and count captured at the moment the in-flight lookup was
+    /// submitted, so the pings that start when it resolves use what was
+    /// selected *then*, not whatever the fields were changed to meanwhile.
+    dns_resolve_pending: Option<(PingMethod, Option<u32>)>,
     /// `Some(text)` when `text` (as typed into `target_input` at the time)
     /// failed DNS resolution - the Ping tab renders `target_input` in red
     /// for exactly as long as it still equals this, and clears back to
@@ -293,6 +297,7 @@ impl StatoriusApp {
             dns_selected: std::collections::HashMap::new(),
             dns_resolve_rx: None,
             dns_resolve_target: String::new(),
+            dns_resolve_pending: None,
             dns_failed_for: None,
             dns_manual_servers: Vec::new(),
             dns_add_input: String::new(),

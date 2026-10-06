@@ -33,6 +33,11 @@ pub struct PingRequest {
     /// Stop automatically once this many attempts have completed - `None`
     /// runs until manually stopped, the default from the UI.
     pub count: Option<u32>,
+    /// The hostname this target's address was resolved from, if any - purely
+    /// a display label (shown as `(name)` in the Ping tab's last column).
+    /// The target itself, and therefore the sort order and the worker's
+    /// bookkeeping, are always keyed by the literal IP.
+    pub label: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -78,10 +83,18 @@ pub struct PingEntry {
     /// the entry (not just the request) so the ▶ resume button restarts with
     /// the same count instead of reverting to "unlimited".
     pub count: Option<u32>,
+    /// Hostname this target was resolved from, if any - see
+    /// `PingRequest::label`. Carried on the entry so the ▶ resume button can
+    /// hand it back with its restart request.
+    pub label: Option<String>,
+    /// Reference point for the "Since" timer while no response has ever
+    /// come back: when pinging this target was (re)started. Once a success
+    /// is recorded, `last_updated` takes over and this is no longer shown.
+    pub started_at: Instant,
 }
 
 impl PingEntry {
-    fn new(target: IpAddr, method: PingMethod, count: Option<u32>) -> Self {
+    fn new(target: IpAddr, method: PingMethod, count: Option<u32>, label: Option<String>) -> Self {
         Self {
             target,
             method,
@@ -92,6 +105,8 @@ impl PingEntry {
             history: VecDeque::with_capacity(HISTORY_LEN),
             running: true,
             count,
+            label,
+            started_at: Instant::now(),
         }
     }
 }
@@ -112,9 +127,31 @@ impl SharedState {
     /// Called when a target is (re)started, so it shows up in the UI - as
     /// "pending" the first time, unchanged if it already existed - even before
     /// the next result comes back.
-    pub fn ensure_target(&self, target: IpAddr, method: PingMethod, count: Option<u32>) {
+    ///
+    /// For an already-known target the history is kept as-is, but the label
+    /// is refreshed (so re-submitting a literal IP clears an old hostname
+    /// label, and re-resolving a name updates it), and - while it has never
+    /// had a response - the "no response yet" timer restarts from now, so
+    /// time spent paused isn't counted as time spent waiting.
+    pub fn ensure_target(
+        &self,
+        target: IpAddr,
+        method: PingMethod,
+        count: Option<u32>,
+        label: Option<String>,
+    ) {
         let mut map = self.inner.lock().unwrap();
-        map.entry(target).or_insert_with(|| PingEntry::new(target, method, count));
+        match map.get_mut(&target) {
+            Some(entry) => {
+                entry.label = label;
+                if entry.successes == 0 {
+                    entry.started_at = Instant::now();
+                }
+            }
+            None => {
+                map.insert(target, PingEntry::new(target, method, count, label));
+            }
+        }
     }
 
     /// Record the outcome of one ping attempt against `target`, pushing it into
@@ -122,7 +159,12 @@ impl SharedState {
     pub fn record_result(&self, target: IpAddr, result: PingResult) {
         let mut map = self.inner.lock().unwrap();
         let entry = map.entry(target).or_insert_with(|| {
-            PingEntry::new(target, PingMethod::Icmp { payload_size: DEFAULT_ICMP_PAYLOAD_SIZE }, None)
+            PingEntry::new(
+                target,
+                PingMethod::Icmp { payload_size: DEFAULT_ICMP_PAYLOAD_SIZE },
+                None,
+                None,
+            )
         });
 
         entry.attempts += 1;

@@ -7,7 +7,9 @@ use tokio::sync::{mpsc, oneshot};
 use crate::net::dns::DnsCommand;
 use crate::state::{PingEntry, PingMethod, PingRequest, WorkerCommand, DEFAULT_ICMP_PAYLOAD_SIZE};
 
-use super::widgets::{render_average_indicator, render_last_indicator, render_since_indicator};
+use super::widgets::{
+    render_average_indicator, render_last_indicator, render_since_indicator_pending,
+};
 use super::{PingMethodChoice, StatoriusApp};
 
 /// Sweeping a subnet larger than this via `a.b.c.d/n` in the target box is
@@ -49,8 +51,9 @@ pub(super) struct PingListLoadState {
     /// for - needed to attribute the reply, and to name it on failure.
     in_flight: Option<(String, oneshot::Receiver<Result<Vec<IpAddr>, String>>)>,
     /// Every address collected so far: literal IPs read straight from the
-    /// file, plus whatever the queue has resolved as it drains.
-    resolved: Vec<IpAddr>,
+    /// file (no label), plus whatever the queue has resolved as it drains
+    /// (labelled with the hostname they came from).
+    resolved: Vec<(IpAddr, Option<String>)>,
     /// `"<entry>: <reason>"` for every line that was neither a valid IP nor
     /// a hostname that resolved. The reason is always the resolver's own
     /// error message (or the specific local failure, e.g. a full send
@@ -117,12 +120,14 @@ impl StatoriusApp {
     /// into every host address in it and starts all of them, and anything
     /// that looks like neither falls back to the whole input being tried as
     /// a single hostname - a background DNS lookup is kicked off (see
-    /// `poll_dns_resolution`) rather than pinging anything yet, the
-    /// resolved address(es) replace the input, and the user submits again
-    /// to actually start the ping(s). (Mixing a hostname with literal
-    /// IPs/CIDRs in the same submission isn't supported, same as before
-    /// CIDR expansion existed - the whole input either is entirely
-    /// IP/CIDR-shaped, or is tried as one hostname.)
+    /// `poll_dns_resolution`), and as soon as it answers every resolved
+    /// address is pinged right away using the Method/port/Count captured
+    /// here at submit time. The input box keeps the hostname as typed; the
+    /// rows are keyed and sorted by IP, with the hostname shown as a label.
+    /// (Mixing a hostname with literal IPs/CIDRs in the same submission
+    /// isn't supported, same as before CIDR expansion existed - the whole
+    /// input either is entirely IP/CIDR-shaped, or is tried as one
+    /// hostname.)
     fn submit_ping_target(&mut self) {
         let trimmed = self.target_input.trim().to_owned();
 
@@ -168,7 +173,7 @@ impl StatoriusApp {
             let mut failures = Vec::new();
             for target in targets {
                 let request =
-                    PingRequest { target, method: method.clone(), count };
+                    PingRequest { target, method: method.clone(), count, label: None };
                 if let Err(e) = self.tx.try_send(WorkerCommand::Start(request)) {
                     failures.push(format!("{target}: {e}"));
                 }
@@ -186,6 +191,25 @@ impl StatoriusApp {
         if self.dns_resolve_rx.is_some() {
             return;
         }
+
+        // Validate Method/port/size/Count now (not after the lookup), so a
+        // bad field is reported immediately instead of after a DNS round
+        // trip - and so the lookup's result is pinged with what was
+        // selected at submit time.
+        let method = match self.current_ping_method() {
+            Ok(m) => m,
+            Err(e) => {
+                self.last_error = Some(e);
+                return;
+            }
+        };
+        let count = match self.current_ping_count() {
+            Ok(c) => c,
+            Err(e) => {
+                self.last_error = Some(e);
+                return;
+            }
+        };
         self.last_error = None;
 
         let servers: Vec<IpAddr> = self
@@ -200,16 +224,17 @@ impl StatoriusApp {
         if self.dns_tx.try_send(command).is_ok() {
             self.dns_resolve_rx = Some(rx);
             self.dns_resolve_target = trimmed;
+            self.dns_resolve_pending = Some((method, count));
         } else {
             self.dns_failed_for = Some(trimmed);
         }
     }
 
     /// Checks whether the in-flight hostname lookup (if any) has finished,
-    /// and applies its result: on success, `target_input` is replaced with
-    /// every resolved A/AAAA address (comma-separated); on failure,
-    /// `dns_failed_for` is set so the input renders in red until the user
-    /// edits it. Called once per frame from `ui_ping_tab`, the same way the
+    /// and applies its result: on success, every resolved A/AAAA address is
+    /// started as a ping target immediately (labelled with the hostname,
+    /// `target_input` is left untouched); on failure, `dns_failed_for` is
+    /// set so the input renders in red until the user edits it. Called once per frame from `ui_ping_tab`, the same way the
     /// L2 tab polls its own duplicate-check oneshot.
     fn poll_dns_resolution(&mut self) {
         let Some(rx) = &mut self.dns_resolve_rx else {
@@ -219,19 +244,38 @@ impl StatoriusApp {
             Ok(Ok(addrs)) => {
                 self.dns_resolve_rx = None;
                 self.dns_failed_for = None;
-                self.target_input = addrs
-                    .iter()
-                    .map(IpAddr::to_string)
-                    .collect::<Vec<_>>()
-                    .join(", ");
+
+                let name = self.dns_resolve_target.clone();
+                let Some((method, count)) = self.dns_resolve_pending.take() else {
+                    // Can't happen (set together with `dns_resolve_rx`), but
+                    // never start pings with a method nobody chose.
+                    return;
+                };
+                let mut failures = Vec::new();
+                for target in addrs {
+                    let request = PingRequest {
+                        target,
+                        method: method.clone(),
+                        count,
+                        label: Some(name.clone()),
+                    };
+                    if let Err(e) = self.tx.try_send(WorkerCommand::Start(request)) {
+                        failures.push(format!("{target}: {e}"));
+                    }
+                }
+                if !failures.is_empty() {
+                    self.last_error = Some(format!("Failed to queue: {}", failures.join("; ")));
+                }
             }
             Ok(Err(_reason)) => {
                 self.dns_resolve_rx = None;
+                self.dns_resolve_pending = None;
                 self.dns_failed_for = Some(self.dns_resolve_target.clone());
             }
             Err(oneshot::error::TryRecvError::Empty) => {}
             Err(oneshot::error::TryRecvError::Closed) => {
                 self.dns_resolve_rx = None;
+                self.dns_resolve_pending = None;
                 self.dns_failed_for = Some(self.dns_resolve_target.clone());
             }
         }
@@ -308,7 +352,7 @@ impl StatoriusApp {
                 continue;
             }
             match line.parse::<IpAddr>() {
-                Ok(ip) => resolved.push(ip),
+                Ok(ip) => resolved.push((ip, None)),
                 Err(_) => queue.push_back(line.to_owned()),
             }
         }
@@ -338,7 +382,8 @@ impl StatoriusApp {
             if let Some((name, rx)) = &mut load.in_flight {
                 match rx.try_recv() {
                     Ok(Ok(addrs)) => {
-                        load.resolved.extend(addrs);
+                        load.resolved
+                            .extend(addrs.into_iter().map(|ip| (ip, Some(name.clone()))));
                         load.in_flight = None;
                     }
                     Ok(Err(reason)) => {
@@ -398,11 +443,12 @@ impl StatoriusApp {
         if done {
             let load = self.ping_list_load_state.take().expect("checked Some above");
             let mut failures = Vec::new();
-            for target in &load.resolved {
+            for (target, label) in &load.resolved {
                 let request = PingRequest {
                     target: *target,
                     method: PingMethod::Icmp { payload_size: DEFAULT_ICMP_PAYLOAD_SIZE },
                     count: None,
+                    label: label.clone(),
                 };
                 if let Err(e) = self.tx.try_send(WorkerCommand::Start(request)) {
                     failures.push(format!("{target}: {e}"));
@@ -634,7 +680,7 @@ impl StatoriusApp {
                     for entry in self.state.snapshot() {
                         ui.label(entry.target.to_string());
                         render_last_indicator(ui, &entry.last_result);
-                        render_since_indicator(ui, &entry.last_updated);
+                        render_since_indicator_pending(ui, &entry.last_updated, entry.started_at);
                         render_average_indicator(ui, &entry.history);
                         render_controls(ui, &entry, &self.tx);
                         ui.end_row();
@@ -680,8 +726,9 @@ impl StatoriusApp {
     }
 }
 
-/// Stop/play toggle (pauses or resumes this target's continuous loop) plus a
-/// delete ("X") button that tears the target down entirely.
+/// Stop/play toggle (pauses or resumes this target's continuous loop), a
+/// delete ("X") button that tears the target down entirely, and - for
+/// targets that came from a hostname - that hostname in parentheses.
 fn render_controls(ui: &mut egui::Ui, entry: &PingEntry, tx: &mpsc::Sender<WorkerCommand>) {
     ui.horizontal(|ui| {
         let toggle_symbol = if entry.running { "\u{23f9}" } else { "\u{25b6}" };
@@ -698,6 +745,7 @@ fn render_controls(ui: &mut egui::Ui, entry: &PingEntry, tx: &mpsc::Sender<Worke
                     target: entry.target,
                     method: entry.method.clone(),
                     count: entry.count,
+                    label: entry.label.clone(),
                 };
                 let _ = tx.try_send(WorkerCommand::Start(request));
             }
@@ -709,6 +757,12 @@ fn render_controls(ui: &mut egui::Ui, entry: &PingEntry, tx: &mpsc::Sender<Worke
             .clicked()
         {
             let _ = tx.try_send(WorkerCommand::Delete(entry.target));
+        }
+
+        // The hostname this address was resolved from, if any - display
+        // only; the row is still keyed and sorted by IP.
+        if let Some(name) = &entry.label {
+            ui.label(format!("({name})"));
         }
     });
 }
