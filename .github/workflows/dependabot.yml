@@ -1,0 +1,24 @@
+# Keeps the GitHub Actions used in .github/workflows/ up to date.
+#
+# The actions' Node runtime (node20 -> node24 -> ...) is declared by each
+# action's own action.yml, so the only way it ever changes for this repo is
+# a new action version - which is exactly what this opens PRs for, instead
+# of finding out when a tag push (the only time build/release actually run)
+# fails.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "07:00"
+      timezone: "Europe/Berlin"
+    # One PR for all action bumps in a given week rather than one per action.
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+    commit-message:
+      prefix: "ci"
+    open-pull-requests-limit: 5

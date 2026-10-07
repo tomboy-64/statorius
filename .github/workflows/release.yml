@@ -18,7 +18,7 @@ jobs:
       version: ${{ steps.cargo_version.outputs.version }}
     steps:
       - name: Checkout Source Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         # No lfs: true - this job only reads Cargo.toml and arch/PKGBUILD,
         # both plain text, not anything git-lfs-tracked.
 
@@ -73,7 +73,7 @@ jobs:
 
     steps:
       - name: Checkout Source Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           # build.rs decodes ico/statorius-master.png on every build to
           # generate the app icon - without this, actions/checkout leaves
@@ -110,14 +110,14 @@ jobs:
 
       # Upload the finished pure .exe binary as an artifact[cite: 2]
       - name: Upload Binary Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact_name }}
           path: target/release/${{ matrix.binary_name }}
 
       - name: Upload MSI Artifact (Windows)
         if: runner.os == 'Windows'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: statorius-windows-installer
           path: target/wix/*.msi
@@ -132,10 +132,10 @@ jobs:
       contents: write
     steps:
       - name: Checkout Source Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: artifacts
 
@@ -160,7 +160,7 @@ jobs:
           cat arch/PKGBUILD
 
       - name: Create Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: |
             artifacts/statorius-linux-amd64/*
