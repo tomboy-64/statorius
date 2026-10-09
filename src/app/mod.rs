@@ -242,6 +242,10 @@ pub struct StatoriusApp {
     /// small in the About tab. A `TextureHandle`, not a texture id, so the
     /// GPU texture stays alive for as long as this app does.
     app_icon_texture: egui::TextureHandle,
+
+    /// The About tab's "Graphics" section: active backend, the check against
+    /// what was requested, and the preferred-backend toggle - see `graphics`.
+    graphics: crate::graphics::GraphicsPanel,
 }
 
 impl StatoriusApp {
@@ -259,6 +263,7 @@ impl StatoriusApp {
         dns_shared: SharedDnsServers,
         dns_tx: mpsc::Sender<DnsCommand>,
         app_icon_texture: egui::TextureHandle,
+        graphics: crate::graphics::GraphicsPanel,
     ) -> Self {
         Self {
             target_input: String::new(),
@@ -323,6 +328,7 @@ impl StatoriusApp {
             ping_list_load_state: None,
             ping_list_errors: None,
             app_icon_texture,
+            graphics,
         }
     }
 }

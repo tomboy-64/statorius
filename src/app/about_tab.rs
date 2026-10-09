@@ -48,5 +48,11 @@ impl StatoriusApp {
                 "In order to accelerate Code Production, I make heave use of LLMs (notably Claude and Gemini)."
             );
         });
+
+        ui.add_space(12.0);
+        ui.separator();
+        ui.add_space(12.0);
+
+        self.graphics.ui(ui);
     }
 }
