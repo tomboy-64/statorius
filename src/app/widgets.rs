@@ -4,26 +4,41 @@ use eframe::egui;
 
 use crate::state::PingResult;
 
+const GREEN: egui::Color32 = egui::Color32::from_rgb(60, 170, 60);
+const RED: egui::Color32 = egui::Color32::from_rgb(210, 60, 60);
+const AMBER: egui::Color32 = egui::Color32::from_rgb(200, 160, 40);
+
 /// Indicator 1: the single most recent ping - green text on success, red on
-/// any kind of non-response (timeout / port closed / error). Shared by both
-/// the plain ping list and the L2 pinger list.
+/// any explicit or implicit failure (timeout / explicit reject / error),
+/// amber for a UDP "no reply" (open-or-filtered - not a failure). Explicit
+/// rejects show *why* (RST, ICMP port/host unreachable, ...) with the full
+/// detail on hover. Shared by both the plain ping list and the L2 pinger
+/// list.
 pub(super) fn render_last_indicator(ui: &mut egui::Ui, last_result: &Option<PingResult>) {
     match last_result {
         None => {
             ui.colored_label(egui::Color32::GRAY, "...");
         }
         Some(PingResult::Success(rtt)) => {
-            ui.colored_label(egui::Color32::from_rgb(60, 170, 60), format!("{rtt:.1?}"));
+            ui.colored_label(GREEN, format!("{rtt:.1?}"));
         }
         Some(PingResult::Timeout) => {
-            ui.colored_label(egui::Color32::from_rgb(210, 60, 60), "timeout");
+            ui.colored_label(RED, "timeout")
+                .on_hover_text("No reply within the timeout (probe or answer lost, or filtered)");
         }
-        Some(PingResult::PortClosed) => {
-            ui.colored_label(egui::Color32::from_rgb(210, 60, 60), "port closed");
+        Some(PingResult::Silent) => {
+            ui.colored_label(AMBER, "no reply")
+                .on_hover_text(
+                    "No reply within the timeout. For UDP that means the port is open or \
+                     filtered - an empty datagram gets no answer from most services - not \
+                     necessarily a failure.",
+                );
+        }
+        Some(PingResult::Rejected { short, detail }) => {
+            ui.colored_label(RED, short.as_str()).on_hover_text(detail.as_str());
         }
         Some(PingResult::Error(e)) => {
-            ui.colored_label(egui::Color32::from_rgb(210, 60, 60), "error")
-                .on_hover_text(e.as_str());
+            ui.colored_label(RED, "error").on_hover_text(e.as_str());
         }
     }
 }
@@ -132,4 +147,67 @@ fn rolling_average(history: &VecDeque<Option<Duration>>) -> Option<Duration> {
     } else {
         Some(sum / count)
     }
+}
+
+/// Ping-tab variant of the rolling-average badge, working on the full
+/// outcomes instead of bare durations so it can tell the failure kinds
+/// apart: green with the average while anything in the window succeeded;
+/// red if nothing did - unless every attempt was a UDP "no reply", which is
+/// open-or-filtered rather than a failure and gets a neutral grey badge.
+/// Hovering lists the window newest first, each with its own reason.
+pub(super) fn render_ping_average_indicator(ui: &mut egui::Ui, samples: &VecDeque<PingResult>) {
+    let durations: VecDeque<Option<Duration>> = samples
+        .iter()
+        .map(|s| if let PingResult::Success(d) = s { Some(*d) } else { None })
+        .collect();
+    let average = rolling_average(&durations);
+    let all_silent =
+        !samples.is_empty() && samples.iter().all(|s| matches!(s, PingResult::Silent));
+    let any_rejected = samples.iter().any(|s| matches!(s, PingResult::Rejected { .. }));
+
+    let (bg, text) = if samples.is_empty() {
+        (egui::Color32::from_gray(70), "...".to_owned())
+    } else if let Some(avg) = average {
+        (egui::Color32::from_rgb(35, 110, 35), format!("{avg:.1?}"))
+    } else if all_silent {
+        (egui::Color32::from_gray(90), "no reply".to_owned())
+    } else if any_rejected {
+        (egui::Color32::from_rgb(140, 30, 30), "rejected".to_owned())
+    } else {
+        (egui::Color32::from_rgb(140, 30, 30), "no response".to_owned())
+    };
+
+    let badge = egui::Frame::NONE
+        .fill(bg)
+        .corner_radius(4.0)
+        .inner_margin(6.0)
+        .show(ui, |ui| {
+            ui.colored_label(egui::Color32::WHITE, text);
+        });
+
+    badge.response.on_hover_ui(|ui| {
+        ui.strong(format!("Last {} ping(s), newest first:", samples.len()));
+        if samples.is_empty() {
+            ui.label("No pings recorded yet.");
+        }
+        for sample in samples.iter().rev() {
+            match sample {
+                PingResult::Success(d) => {
+                    ui.colored_label(GREEN, format!("{d:.1?}"));
+                }
+                PingResult::Timeout => {
+                    ui.colored_label(RED, "timeout");
+                }
+                PingResult::Silent => {
+                    ui.colored_label(AMBER, "no reply (open or filtered)");
+                }
+                PingResult::Rejected { short, detail } => {
+                    ui.colored_label(RED, format!("{short} \u{2013} {detail}"));
+                }
+                PingResult::Error(e) => {
+                    ui.colored_label(RED, format!("error: {e}"));
+                }
+            }
+        }
+    });
 }

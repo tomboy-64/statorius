@@ -26,6 +26,65 @@ pub enum PingMethod {
     Udp { port: u16 },
 }
 
+/// Which protocol a plain ping uses - the part of `PingMethod` that decides
+/// whether two pingers for the same address are "the same pinger".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum PingProto {
+    Icmp,
+    Tcp,
+    Udp,
+}
+
+/// Identity of one pinger: target address + protocol (+ port for TCP/UDP,
+/// `0` for ICMP). The same address can therefore have an ICMP, a TCP and a
+/// UDP pinger side by side, and e.g. TCP/22 next to TCP/443; (re)starting
+/// with an identical key restarts that pinger instead of adding another.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct PingKey {
+    pub target: IpAddr,
+    pub proto: PingProto,
+    pub port: u16,
+}
+
+impl PingMethod {
+    pub fn proto(&self) -> PingProto {
+        match self {
+            PingMethod::Icmp { .. } => PingProto::Icmp,
+            PingMethod::Tcp { .. } => PingProto::Tcp,
+            PingMethod::Udp { .. } => PingProto::Udp,
+        }
+    }
+
+    pub fn key(&self, target: IpAddr) -> PingKey {
+        let port = match self {
+            PingMethod::Icmp { .. } => 0,
+            PingMethod::Tcp { port } | PingMethod::Udp { port } => *port,
+        };
+        PingKey { target, proto: self.proto(), port }
+    }
+
+    /// Short label for the list: `ICMP`, `TCP/443`, `UDP/53`.
+    pub fn label(&self) -> String {
+        match self {
+            PingMethod::Icmp { .. } => "ICMP".to_owned(),
+            PingMethod::Tcp { port } => format!("TCP/{port}"),
+            PingMethod::Udp { port } => format!("UDP/{port}"),
+        }
+    }
+
+    /// What one attempt actually puts on the wire - shown as a tooltip.
+    pub fn wire_description(&self) -> &'static str {
+        match self {
+            PingMethod::Icmp { .. } => "ICMP echo request \u{2192} echo reply",
+            PingMethod::Tcp { .. } => "TCP SYN \u{2192} SYN/ACK (open) or RST (closed)",
+            PingMethod::Udp { .. } => {
+                "Empty UDP datagram \u{2192} reply (open) or ICMP port unreachable (closed); \
+                 silence = open or filtered"
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct PingRequest {
     pub target: IpAddr,
@@ -43,8 +102,18 @@ pub struct PingRequest {
 #[derive(Debug, Clone)]
 pub enum PingResult {
     Success(Duration),
+    /// Nothing came back within the timeout (ICMP/TCP: probe or answer
+    /// lost, or silently filtered).
     Timeout,
-    PortClosed,
+    /// UDP only: no reply at all. Not a failure - an open UDP port that
+    /// has nothing to say to an empty datagram looks exactly like this -
+    /// so it is shown neutrally, not red.
+    Silent,
+    /// The target or something on the path explicitly said no: TCP RST,
+    /// ICMP port/host/network unreachable, admin-prohibited, TTL exceeded...
+    /// `short` fits in the list cell, `detail` goes in the tooltip.
+    Rejected { short: String, detail: String },
+    /// Local problem (socket creation, send failure, ...).
     Error(String),
 }
 
@@ -56,24 +125,25 @@ pub enum WorkerCommand {
     /// Start (or restart, if already running) continuous pinging of a target.
     Start(PingRequest),
     /// Pause continuous pinging; the row and its history are kept as-is.
-    Stop(IpAddr),
-    /// Pause (if running) and forget this target entirely.
-    Delete(IpAddr),
+    Stop(PingKey),
+    /// Pause (if running) and forget this pinger entirely.
+    Delete(PingKey),
 }
 
 /// The latest known status for one target. Updated in place by the worker,
 /// read out (cloned) by the UI every frame via `SharedState::snapshot`.
 #[derive(Debug, Clone)]
 pub struct PingEntry {
+    pub key: PingKey,
     pub target: IpAddr,
     pub method: PingMethod,
     pub last_result: Option<PingResult>,
     pub last_updated: Option<Instant>,
     pub attempts: u32,
     pub successes: u32,
-    /// Most recent samples, oldest at the front, newest at the back, capped at
-    /// `HISTORY_LEN`. `None` marks a failed/timed-out/errored attempt.
-    pub history: VecDeque<Option<Duration>>,
+    /// Most recent outcomes, oldest at the front, newest at the back, capped
+    /// at `HISTORY_LEN`.
+    pub samples: VecDeque<PingResult>,
     /// Whether the continuous ping loop for this target is currently active -
     /// `false` both when the user paused it and when it ran out its `count`
     /// on its own; either way, resuming starts a fresh `count`-sized run.
@@ -96,13 +166,14 @@ pub struct PingEntry {
 impl PingEntry {
     fn new(target: IpAddr, method: PingMethod, count: Option<u32>, label: Option<String>) -> Self {
         Self {
+            key: method.key(target),
             target,
             method,
             last_result: None,
             last_updated: None,
             attempts: 0,
             successes: 0,
-            history: VecDeque::with_capacity(HISTORY_LEN),
+            samples: VecDeque::with_capacity(HISTORY_LEN),
             running: true,
             count,
             label,
@@ -116,7 +187,7 @@ impl PingEntry {
 /// deliberately no "results" channel: this `SharedState` *is* the state object.
 #[derive(Clone, Default)]
 pub struct SharedState {
-    inner: Arc<Mutex<HashMap<IpAddr, PingEntry>>>,
+    inner: Arc<Mutex<HashMap<PingKey, PingEntry>>>,
 }
 
 impl SharedState {
@@ -140,67 +211,62 @@ impl SharedState {
         count: Option<u32>,
         label: Option<String>,
     ) {
+        let key = method.key(target);
         let mut map = self.inner.lock().unwrap();
-        match map.get_mut(&target) {
+        match map.get_mut(&key) {
             Some(entry) => {
+                // Same key = same pinger restarted; take over whatever
+                // isn't part of the key (ICMP payload size, count, label).
+                entry.method = method;
+                entry.count = count;
                 entry.label = label;
                 if entry.successes == 0 {
                     entry.started_at = Instant::now();
                 }
             }
             None => {
-                map.insert(target, PingEntry::new(target, method, count, label));
+                map.insert(key, PingEntry::new(target, method, count, label));
             }
         }
     }
 
     /// Record the outcome of one ping attempt against `target`, pushing it into
     /// the rolling history (dropping the oldest sample once it's full).
-    pub fn record_result(&self, target: IpAddr, result: PingResult) {
+    pub fn record_result(&self, key: PingKey, result: PingResult) {
         let mut map = self.inner.lock().unwrap();
-        let entry = map.entry(target).or_insert_with(|| {
-            PingEntry::new(
-                target,
-                PingMethod::Icmp { payload_size: DEFAULT_ICMP_PAYLOAD_SIZE },
-                None,
-                None,
-            )
-        });
+        // Only ever reached for a key `ensure_target` has registered (or
+        // that was deleted meanwhile - then the result is simply dropped,
+        // rather than resurrecting a row the user just removed).
+        let Some(entry) = map.get_mut(&key) else {
+            return;
+        };
 
         entry.attempts += 1;
-        let sample = if let PingResult::Success(d) = &result {
-            Some(*d)
-        } else {
-            None
-        };
-        if sample.is_some() {
+        if let PingResult::Success(_) = &result {
             entry.successes += 1;
-        }
-
-        if entry.history.len() == HISTORY_LEN {
-            entry.history.pop_front();
-        }
-        entry.history.push_back(sample);
-
-        entry.last_result = Some(result);
-        if matches!(entry.last_result, Some(PingResult::Success(_))) {
             entry.last_updated = Some(Instant::now());
         }
+
+        if entry.samples.len() == HISTORY_LEN {
+            entry.samples.pop_front();
+        }
+        entry.samples.push_back(result.clone());
+        entry.last_result = Some(result);
     }
 
     /// Mark whether a target's continuous loop is currently active, so the UI
     /// can show a stop-sign vs. a play-sign.
-    pub fn set_running(&self, target: IpAddr, running: bool) {
+    pub fn set_running(&self, key: PingKey, running: bool) {
         let mut map = self.inner.lock().unwrap();
-        if let Some(entry) = map.get_mut(&target) {
+        if let Some(entry) = map.get_mut(&key) {
             entry.running = running;
         }
     }
 
     /// Forget a target entirely (used by the delete/"X" control).
-    pub fn remove(&self, target: IpAddr) {
+    pub fn remove(&self, key: PingKey) {
         let mut map = self.inner.lock().unwrap();
-        map.remove(&target);
+        map.remove(&key);
     }
 
     /// Snapshot every known target for rendering. Cloned out so the UI never holds
@@ -208,7 +274,7 @@ impl SharedState {
     pub fn snapshot(&self) -> Vec<PingEntry> {
         let map = self.inner.lock().unwrap();
         let mut entries: Vec<PingEntry> = map.values().cloned().collect();
-        entries.sort_by_key(|e| e.target);
+        entries.sort_by_key(|e| e.key);
         entries
     }
 }
