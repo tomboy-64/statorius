@@ -12,7 +12,7 @@ use std::net::IpAddr;
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
-use surge_ping::{Client, PingIdentifier, PingSequence, Pinger, SurgeError};
+use surge_ping::{Client, IcmpPacket, PingIdentifier, PingSequence, Pinger, SurgeError};
 use tokio::net::{TcpSocket, UdpSocket};
 use tokio::time::timeout;
 
@@ -69,17 +69,113 @@ impl PingBackend for IcmpSocketBackend {
     async fn ping_once(&mut self, _target: IpAddr, seq: u16) -> PingResult {
         let payload = vec![0u8; self.payload_size];
         match self.pinger.ping(PingSequence(seq), &payload).await {
-            Ok((_packet, rtt)) => PingResult::Success(rtt),
+            // `surge_ping` hands back *any* ICMP message that quotes our
+            // request - not just echo replies, but also destination
+            // unreachable / time exceeded from a router on the path - so
+            // the type has to be checked before calling it a success.
+            Ok((packet, rtt)) => match classify_icmp_reply(&packet) {
+                None => PingResult::Success(rtt),
+                Some((short, detail)) => PingResult::Rejected { short, detail },
+            },
             Err(SurgeError::Timeout { .. }) => PingResult::Timeout,
             Err(e) => PingResult::Error(e.to_string()),
         }
     }
 }
 
-/// Today's TCP-connect backend: treats a successful handshake as
-/// reachability. Holds no per-target state beyond the port, so a fresh
-/// `TcpSocket` is created for every attempt (sockets can't be reused across
-/// `connect()` calls anyway).
+/// `None` for a genuine echo reply; otherwise `(short, detail)` describing
+/// the ICMP error that came back instead (and who sent it - usually a
+/// router on the path, or the target itself).
+fn classify_icmp_reply(packet: &IcmpPacket) -> Option<(String, String)> {
+    let (family, ty, code, from) = match packet {
+        IcmpPacket::V4(p) => ("ICMP", p.get_icmp_type().0, p.get_icmp_code().0, p.get_source().to_string()),
+        IcmpPacket::V6(p) => ("ICMPv6", p.get_icmpv6_type().0, p.get_icmpv6_code().0, p.get_source().to_string()),
+    };
+    let v6 = matches!(packet, IcmpPacket::V6(_));
+
+    // Echo reply: type 0 (ICMPv4) / 129 (ICMPv6).
+    if (!v6 && ty == 0) || (v6 && ty == 129) {
+        return None;
+    }
+
+    let short: &str = if !v6 {
+        match (ty, code) {
+            (3, 0) => "network unreachable",
+            (3, 1) => "host unreachable",
+            (3, 2) => "protocol unreachable",
+            (3, 3) => "port unreachable",
+            (3, 4) => "frag needed (DF set)",
+            (3, 5) => "source route failed",
+            (3, 6) | (3, 7) => "network/host unknown",
+            (3, 9) | (3, 10) | (3, 13) => "administratively prohibited",
+            (3, _) => "destination unreachable",
+            (4, _) => "source quench",
+            (5, _) => "redirect",
+            (11, 0) => "TTL exceeded",
+            (11, 1) => "reassembly time exceeded",
+            (12, _) => "parameter problem",
+            _ => "ICMP error",
+        }
+    } else {
+        match (ty, code) {
+            (1, 0) => "no route to host",
+            (1, 1) => "administratively prohibited",
+            (1, 2) => "beyond scope of source",
+            (1, 3) => "address unreachable",
+            (1, 4) => "port unreachable",
+            (1, 5) => "source policy failed",
+            (1, 6) => "reject route",
+            (1, _) => "destination unreachable",
+            (2, _) => "packet too big",
+            (3, _) => "hop limit exceeded",
+            (4, _) => "parameter problem",
+            _ => "ICMPv6 error",
+        }
+    };
+    Some((short.to_owned(), format!("{family} type {ty} code {code}: {short} (from {from})")))
+}
+
+/// Maps an I/O error that is really "the network told us no" (an ICMP
+/// unreachable surfaced by the OS as `EHOSTUNREACH`/`ENETUNREACH`/...) to
+/// `(short, detail)`. `None` for anything else - the caller decides whether
+/// that is a plain local error.
+fn classify_unreachable(e: &std::io::Error) -> Option<(String, String)> {
+    use std::io::ErrorKind;
+    // Raw errno / WSA codes as a fallback for platforms where std doesn't
+    // map them to the dedicated kinds: Linux EHOSTUNREACH 113 / ENETUNREACH
+    // 101, Windows WSAEHOSTUNREACH 10065 / WSAENETUNREACH 10051.
+    let raw = e.raw_os_error();
+    let short = match e.kind() {
+        ErrorKind::HostUnreachable => "host unreachable",
+        ErrorKind::NetworkUnreachable => "network unreachable",
+        _ => match raw {
+            Some(113) | Some(10065) => "host unreachable",
+            Some(101) | Some(10051) => "network unreachable",
+            _ => return None,
+        },
+    };
+    Some((short.to_owned(), format!("{short} (ICMP from the path, as reported by the OS: {e})")))
+}
+
+/// TCP "SYN ping": one connection attempt per round, read purely from how
+/// the handshake's first leg is answered -
+/// - SYN/ACK: port open, RTT = time until it arrived;
+/// - RST: host is up, port closed (explicit reject);
+/// - ICMP unreachable/admin-prohibited, surfaced by the OS: explicit reject
+///   from the path;
+/// - nothing: timeout (SYN or answer dropped / filtered).
+///
+/// Implemented with the kernel's `connect()` (no raw sockets, so it works
+/// unprivileged and identically on Linux and Windows) - the stack therefore
+/// also sends the final ACK of an open port. To keep the footprint as close
+/// to a bare SYN probe as that allows, the socket is closed with a zero
+/// linger: the teardown is a single RST right away instead of a FIN
+/// exchange and TIME_WAIT state on either side. A truly half-open probe
+/// (never ACKing the SYN/ACK) would need raw packet injection.
+///
+/// Holds no per-target state beyond the port, so a fresh `TcpSocket` is
+/// created for every attempt (sockets can't be reused across `connect()`
+/// calls anyway).
 pub struct TcpConnectBackend {
     port: u16,
 }
@@ -102,18 +198,28 @@ impl PingBackend for TcpConnectBackend {
             Ok(s) => s,
             Err(e) => return PingResult::Error(format!("socket create failed: {e}")),
         };
+        // Best effort: if it fails, the close just falls back to a normal FIN.
+        let _ = socket.set_zero_linger();
 
         let start = Instant::now();
         match timeout(TCP_TIMEOUT, socket.connect(addr)).await {
+            // The stream is dropped right here -> RST (zero linger).
             Ok(Ok(_stream)) => PingResult::Success(start.elapsed()),
-            Ok(Err(e)) => {
-                // A prompt "connection refused" still tells us the host is up.
-                if e.kind() == std::io::ErrorKind::ConnectionRefused {
-                    PingResult::PortClosed
-                } else {
-                    PingResult::Error(e.to_string())
+            Ok(Err(e)) => match e.kind() {
+                std::io::ErrorKind::ConnectionRefused | std::io::ErrorKind::ConnectionReset => {
+                    PingResult::Rejected {
+                        short: "refused (RST)".to_owned(),
+                        detail: format!(
+                            "TCP RST in reply to the SYN: host is up, port {} is closed ({e})",
+                            self.port
+                        ),
+                    }
                 }
-            }
+                _ => match classify_unreachable(&e) {
+                    Some((short, detail)) => PingResult::Rejected { short, detail },
+                    None => PingResult::Error(e.to_string()),
+                },
+            },
             Err(_) => PingResult::Timeout,
         }
     }
@@ -127,8 +233,8 @@ impl PingBackend for TcpConnectBackend {
 ///   a socket error on the next read - definitely up, this port is closed;
 /// - silence - could mean an open port that had nothing to say back to an
 ///   empty datagram, or a filtered path; UDP can't tell those apart, so
-///   this is reported as `Timeout` like any other non-response rather than
-///   guessing "open".
+///   this is reported as `Silent` (shown neutrally, not as a failure)
+///   rather than guessing "open" or "down".
 pub struct UdpProbeBackend {
     port: u16,
 }
@@ -136,6 +242,33 @@ pub struct UdpProbeBackend {
 impl UdpProbeBackend {
     pub fn new(port: u16) -> Self {
         Self { port }
+    }
+}
+
+#[async_trait]
+impl UdpProbeBackend {
+    /// Maps an I/O error from `send`/`recv` on the connected UDP socket:
+    /// which error kind an ICMP Port Unreachable surfaces as differs by OS
+    /// (`ConnectionRefused` on Linux/macOS, `ConnectionReset` on Windows),
+    /// so both count as the explicit "port unreachable"; other unreachable
+    /// codes map via `classify_unreachable`; anything else is a local error.
+    fn io_failure(&self, e: std::io::Error) -> PingResult {
+        if matches!(
+            e.kind(),
+            std::io::ErrorKind::ConnectionRefused | std::io::ErrorKind::ConnectionReset
+        ) {
+            return PingResult::Rejected {
+                short: "port unreachable".to_owned(),
+                detail: format!(
+                    "ICMP port unreachable for UDP/{}: host is up, nothing listens there ({e})",
+                    self.port
+                ),
+            };
+        }
+        match classify_unreachable(&e) {
+            Some((short, detail)) => PingResult::Rejected { short, detail },
+            None => PingResult::Error(e.to_string()),
+        }
     }
 }
 
@@ -149,34 +282,19 @@ impl PingBackend for UdpProbeBackend {
             Err(e) => return PingResult::Error(format!("socket bind failed: {e}")),
         };
         if let Err(e) = socket.connect(addr).await {
-            return PingResult::Error(format!("connect failed: {e}"));
+            return self.io_failure(e);
         }
 
         let start = Instant::now();
         if let Err(e) = socket.send(&[]).await {
-            return PingResult::Error(e.to_string());
+            return self.io_failure(e);
         }
 
         let mut buf = [0u8; 512];
         match timeout(UDP_TIMEOUT, socket.recv(&mut buf)).await {
             Ok(Ok(_n)) => PingResult::Success(start.elapsed()),
-            // Which OS-level error kind an ICMP Port Unreachable surfaces
-            // as on a connected UDP socket isn't fully nailed down across
-            // platforms here - ConnectionRefused is the common Linux/macOS
-            // shape, Windows has been seen to surface ConnectionReset for
-            // the same condition - so both are treated as "port closed"
-            // rather than only trusting one. Worth double-checking against
-            // real Windows behavior once this is in front of it.
-            Ok(Err(e))
-            if matches!(
-                    e.kind(),
-                    std::io::ErrorKind::ConnectionRefused | std::io::ErrorKind::ConnectionReset
-                ) =>
-                {
-                    PingResult::PortClosed
-                }
-            Ok(Err(e)) => PingResult::Error(e.to_string()),
-            Err(_) => PingResult::Timeout,
+            Ok(Err(e)) => self.io_failure(e),
+            Err(_) => PingResult::Silent,
         }
     }
 }

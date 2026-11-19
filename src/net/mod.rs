@@ -14,7 +14,6 @@ pub(crate) mod l2;
 mod windows_elevate;
 
 use std::collections::HashMap;
-use std::net::IpAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -24,7 +23,7 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
 use backend::{IcmpSocketBackend, PingBackend, TcpConnectBackend, UdpProbeBackend};
-use crate::state::{PingMethod, PingResult, SharedState, WorkerCommand};
+use crate::state::{PingKey, PingMethod, PingResult, SharedState, WorkerCommand};
 
 /// Delay between successive pings to the same target once its continuous loop
 /// is running - mirrors the classic `ping` utility's 1-second cadence.
@@ -34,7 +33,7 @@ const PING_INTERVAL: Duration = Duration::from_secs(1);
 /// out `PING_INTERVAL`, so pressing "Stop" feels close to instant.
 const STOP_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
-/// Everything needed to control one target's in-flight continuous-ping task.
+/// Everything needed to control one pinger's in-flight continuous-ping task.
 struct TargetHandle {
     stop_flag: Arc<AtomicBool>,
     task: JoinHandle<()>,
@@ -63,7 +62,7 @@ pub async fn ping_worker(mut rx: mpsc::Receiver<WorkerCommand>, state: SharedSta
         }
     };
 
-    let mut handles: HashMap<IpAddr, TargetHandle> = HashMap::new();
+    let mut handles: HashMap<PingKey, TargetHandle> = HashMap::new();
 
     // Each continuous-ping loop needs a locally-unique ICMP identifier for its
     // whole lifetime.
@@ -73,14 +72,17 @@ pub async fn ping_worker(mut rx: mpsc::Receiver<WorkerCommand>, state: SharedSta
         match command {
             WorkerCommand::Start(request) => {
                 let target = request.target;
+                // One loop per (address, protocol, port): the same address
+                // can run ICMP, TCP and UDP side by side.
+                let key = request.method.key(target);
 
-                // Re-starting an already-running target replaces its loop
-                // outright. We abort the old task AND await its actual
+                // Re-starting an already-running pinger (same key) replaces
+                // its loop outright. We abort the old task AND await its actual
                 // termination before spawning the replacement - otherwise a
                 // straggling in-flight ping from the old generation can race
                 // the new one to call `record_result`, landing a stale
                 // sample out of order.
-                if let Some(old) = handles.remove(&target) {
+                if let Some(old) = handles.remove(&key) {
                     old.stop_flag.store(true, Ordering::Relaxed);
                     old.task.abort();
                     let _ = old.task.await;
@@ -92,7 +94,7 @@ pub async fn ping_worker(mut rx: mpsc::Receiver<WorkerCommand>, state: SharedSta
                     request.count,
                     request.label.clone(),
                 );
-                state.set_running(target, true);
+                state.set_running(key, true);
 
                 let ident = next_ident;
                 next_ident = next_ident.wrapping_add(1);
@@ -114,8 +116,8 @@ pub async fn ping_worker(mut rx: mpsc::Receiver<WorkerCommand>, state: SharedSta
                         {
                             Ok(b) => Box::new(b),
                             Err(msg) => {
-                                state.record_result(target, PingResult::Error(msg));
-                                state.set_running(target, false);
+                                state.record_result(key, PingResult::Error(msg));
+                                state.set_running(key, false);
                                 continue;
                             }
                         }
@@ -130,30 +132,30 @@ pub async fn ping_worker(mut rx: mpsc::Receiver<WorkerCommand>, state: SharedSta
                 let count = request.count;
 
                 let task = tokio::spawn(async move {
-                    run_continuous_ping(target, backend, task_state, task_stop_flag, count).await;
+                    run_continuous_ping(key, backend, task_state, task_stop_flag, count).await;
                 });
 
-                handles.insert(target, TargetHandle { stop_flag, task });
+                handles.insert(key, TargetHandle { stop_flag, task });
             }
 
-            WorkerCommand::Stop(target) => {
+            WorkerCommand::Stop(key) => {
                 // Graceful: just raise the flag and let the loop wind down on
                 // its own after finishing whatever ping is currently in
                 // flight, then drop (detach) the handle. No `.abort()` here
                 // on purpose.
-                if let Some(handle) = handles.remove(&target) {
+                if let Some(handle) = handles.remove(&key) {
                     handle.stop_flag.store(true, Ordering::Relaxed);
                 }
-                state.set_running(target, false);
+                state.set_running(key, false);
             }
 
-            WorkerCommand::Delete(target) => {
-                if let Some(handle) = handles.remove(&target) {
+            WorkerCommand::Delete(key) => {
+                if let Some(handle) = handles.remove(&key) {
                     handle.stop_flag.store(true, Ordering::Relaxed);
                     handle.task.abort();
                     let _ = handle.task.await;
                 }
-                state.remove(target);
+                state.remove(key);
             }
         }
     }
@@ -165,12 +167,13 @@ pub async fn ping_worker(mut rx: mpsc::Receiver<WorkerCommand>, state: SharedSta
 /// periodically), repeat. Entirely backend-agnostic - it doesn't know or care
 /// whether `backend` is today's ICMP/TCP/UDP socket or a future raw-L2 impl.
 async fn run_continuous_ping(
-    target: IpAddr,
+    key: PingKey,
     mut backend: Box<dyn PingBackend>,
     state: SharedState,
     stop_flag: Arc<AtomicBool>,
     count: Option<u32>,
 ) {
+    let target = key.target;
     let mut seq: u16 = 0;
     let mut completed: u32 = 0;
 
@@ -183,14 +186,14 @@ async fn run_continuous_ping(
         if stop_flag.load(Ordering::Relaxed) {
             break;
         }
-        state.record_result(target, result);
+        state.record_result(key, result);
         completed += 1;
 
         if count.is_some_and(|limit| completed >= limit) {
             // Ran out its count on its own, same end state as a manual
             // Stop - the ▶ button resumes it for another `count`-sized run
             // rather than defaulting back to unlimited (see `PingEntry`).
-            state.set_running(target, false);
+            state.set_running(key, false);
             break;
         }
 

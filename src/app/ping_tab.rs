@@ -8,7 +8,7 @@ use crate::net::dns::DnsCommand;
 use crate::state::{PingEntry, PingMethod, PingRequest, WorkerCommand, DEFAULT_ICMP_PAYLOAD_SIZE};
 
 use super::widgets::{
-    render_average_indicator, render_last_indicator, render_since_indicator_pending,
+    render_last_indicator, render_ping_average_indicator, render_since_indicator_pending,
 };
 use super::{PingMethodChoice, StatoriusApp};
 
@@ -231,8 +231,8 @@ impl StatoriusApp {
     }
 
     /// Checks whether the in-flight hostname lookup (if any) has finished,
-    /// and applies its result: on success, every resolved A/AAAA address is
-    /// started as a ping target immediately (labelled with the hostname,
+    /// and applies its result: on success, every resolved A/AAAA address (ICMP)
+    /// or just one of them (TCP/UDP) is started as a ping target immediately (labelled with the hostname,
     /// `target_input` is left untouched); on failure, `dns_failed_for` is
     /// set so the input renders in red until the user edits it. Called once per frame from `ui_ping_tab`, the same way the
     /// L2 tab polls its own duplicate-check oneshot.
@@ -251,6 +251,25 @@ impl StatoriusApp {
                     // never start pings with a method nobody chose.
                     return;
                 };
+
+                // A TCP/UDP ping against a hostname probes one endpoint, not
+                // every A/AAAA record behind it (a name with several
+                // records would otherwise start several pingers for the one
+                // port the user typed): the first IPv4 address, or the first
+                // address if there's no IPv4 one. ICMP keeps pinging every
+                // resolved address, as before.
+                let addrs = if matches!(method, PingMethod::Icmp { .. }) {
+                    addrs
+                } else {
+                    addrs
+                        .iter()
+                        .find(|ip| ip.is_ipv4())
+                        .or_else(|| addrs.first())
+                        .copied()
+                        .into_iter()
+                        .collect()
+                };
+
                 let mut failures = Vec::new();
                 for target in addrs {
                     let request = PingRequest {
@@ -298,7 +317,15 @@ impl StatoriusApp {
             return;
         };
 
-        let targets: Vec<IpAddr> = self.state.snapshot().into_iter().map(|e| e.target).collect();
+        // One line per address, even if it runs ICMP + TCP + UDP pingers.
+        let targets: Vec<IpAddr> = self
+            .state
+            .snapshot()
+            .into_iter()
+            .map(|e| e.target)
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
         let contents =
             targets.iter().map(IpAddr::to_string).collect::<Vec<_>>().join(NATIVE_NEWLINE);
 
@@ -664,11 +691,12 @@ impl StatoriusApp {
 
         egui::ScrollArea::vertical().id_salt("ping_scroll").show(ui, |ui| {
             egui::Grid::new("ping_results_grid")
-                .num_columns(5)
+                .num_columns(6)
                 .striped(true)
                 .spacing([12.0, 6.0])
                 .show(ui, |ui| {
                     ui.strong("Target");
+                    ui.strong("Proto");
                     ui.strong("Last");
                     ui.strong("Since");
                     ui.strong(format!("Avg ({})", crate::state::HISTORY_LEN));
@@ -679,9 +707,11 @@ impl StatoriusApp {
                     // update mechanism, there is no separate results channel.
                     for entry in self.state.snapshot() {
                         ui.label(entry.target.to_string());
+                        ui.label(entry.method.label())
+                            .on_hover_text(entry.method.wire_description());
                         render_last_indicator(ui, &entry.last_result);
                         render_since_indicator_pending(ui, &entry.last_updated, entry.started_at);
-                        render_average_indicator(ui, &entry.history);
+                        render_ping_average_indicator(ui, &entry.samples);
                         render_controls(ui, &entry, &self.tx);
                         ui.end_row();
                     }
@@ -726,8 +756,8 @@ impl StatoriusApp {
     }
 }
 
-/// Stop/play toggle (pauses or resumes this target's continuous loop), a
-/// delete ("X") button that tears the target down entirely, and - for
+/// Stop/play toggle (pauses or resumes this pinger's continuous loop), a
+/// delete ("X") button that tears the pinger down entirely, and - for
 /// targets that came from a hostname - that hostname in parentheses.
 fn render_controls(ui: &mut egui::Ui, entry: &PingEntry, tx: &mpsc::Sender<WorkerCommand>) {
     ui.horizontal(|ui| {
@@ -739,7 +769,7 @@ fn render_controls(ui: &mut egui::Ui, entry: &PingEntry, tx: &mpsc::Sender<Worke
         };
         if ui.small_button(toggle_symbol).on_hover_text(toggle_hover).clicked() {
             if entry.running {
-                let _ = tx.try_send(WorkerCommand::Stop(entry.target));
+                let _ = tx.try_send(WorkerCommand::Stop(entry.key));
             } else {
                 let request = PingRequest {
                     target: entry.target,
@@ -756,7 +786,7 @@ fn render_controls(ui: &mut egui::Ui, entry: &PingEntry, tx: &mpsc::Sender<Worke
             .on_hover_text("Delete this pinger")
             .clicked()
         {
-            let _ = tx.try_send(WorkerCommand::Delete(entry.target));
+            let _ = tx.try_send(WorkerCommand::Delete(entry.key));
         }
 
         // The hostname this address was resolved from, if any - display
