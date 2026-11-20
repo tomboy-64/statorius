@@ -278,3 +278,52 @@ impl SharedState {
         entries
     }
 }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::Ipv4Addr;
+
+    const IP: IpAddr = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1));
+
+    #[test]
+    fn icmp_tcp_udp_coexist_and_same_key_restarts() {
+        let st = SharedState::new();
+        st.ensure_target(IP, PingMethod::Icmp { payload_size: 56 }, None, None);
+        st.ensure_target(IP, PingMethod::Tcp { port: 443 }, None, None);
+        st.ensure_target(IP, PingMethod::Udp { port: 53 }, None, None);
+        st.ensure_target(IP, PingMethod::Tcp { port: 22 }, None, None);
+        assert_eq!(st.snapshot().len(), 4);
+
+        // Same key again: no new row, ICMP payload size is taken over.
+        st.ensure_target(IP, PingMethod::Icmp { payload_size: 1400 }, None, None);
+        st.ensure_target(IP, PingMethod::Tcp { port: 443 }, None, None);
+        let snap = st.snapshot();
+        assert_eq!(snap.len(), 4);
+        let icmp = snap.iter().find(|e| e.key.proto == PingProto::Icmp).unwrap();
+        assert!(matches!(icmp.method, PingMethod::Icmp { payload_size: 1400 }));
+    }
+
+    #[test]
+    fn results_land_on_their_own_pinger_and_delete_is_scoped() {
+        let st = SharedState::new();
+        let tcp = PingMethod::Tcp { port: 443 };
+        let udp = PingMethod::Udp { port: 443 };
+        st.ensure_target(IP, tcp.clone(), None, None);
+        st.ensure_target(IP, udp.clone(), None, None);
+        st.record_result(tcp.key(IP), PingResult::Success(Duration::from_millis(3)));
+        st.record_result(udp.key(IP), PingResult::Silent);
+        let snap = st.snapshot();
+        let t = snap.iter().find(|e| e.key.proto == PingProto::Tcp).unwrap();
+        let u = snap.iter().find(|e| e.key.proto == PingProto::Udp).unwrap();
+        assert!(matches!(t.last_result, Some(PingResult::Success(_))));
+        assert!(matches!(u.last_result, Some(PingResult::Silent)));
+        assert_eq!(t.successes, 1);
+        assert_eq!(u.successes, 0);
+
+        st.remove(tcp.key(IP));
+        assert_eq!(st.snapshot().len(), 1);
+        // A late result for a deleted pinger must not resurrect it.
+        st.record_result(tcp.key(IP), PingResult::Timeout);
+        assert_eq!(st.snapshot().len(), 1);
+    }
+}

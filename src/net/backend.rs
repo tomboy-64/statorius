@@ -297,3 +297,80 @@ impl PingBackend for UdpProbeBackend {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::Ipv4Addr;
+    use tokio::net::TcpListener;
+
+    const LO: IpAddr = IpAddr::V4(Ipv4Addr::LOCALHOST);
+
+    #[tokio::test]
+    async fn tcp_open_port_succeeds() {
+        let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = l.local_addr().unwrap().port();
+        let r = TcpConnectBackend::new(port).ping_once(LO, 0).await;
+        assert!(matches!(r, PingResult::Success(_)), "{r:?}");
+    }
+
+    #[tokio::test]
+    async fn tcp_closed_port_is_rejected_with_rst() {
+        let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = l.local_addr().unwrap().port();
+        drop(l);
+        let r = TcpConnectBackend::new(port).ping_once(LO, 0).await;
+        match r {
+            PingResult::Rejected { short, .. } => assert_eq!(short, "refused (RST)"),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn udp_reply_succeeds() {
+        let srv = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let port = srv.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            let mut b = [0u8; 16];
+            if let Ok((_, from)) = srv.recv_from(&mut b).await {
+                let _ = srv.send_to(b"x", from).await;
+            }
+        });
+        let r = UdpProbeBackend::new(port).ping_once(LO, 0).await;
+        assert!(matches!(r, PingResult::Success(_)), "{r:?}");
+    }
+
+    #[tokio::test]
+    async fn udp_closed_port_is_rejected() {
+        let s = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let port = s.local_addr().unwrap().port();
+        drop(s);
+        let r = UdpProbeBackend::new(port).ping_once(LO, 0).await;
+        match r {
+            PingResult::Rejected { short, .. } => assert_eq!(short, "port unreachable"),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn udp_silence_is_silent_not_failure() {
+        // Bound but never answers: no ICMP unreachable, no reply.
+        let s = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let port = s.local_addr().unwrap().port();
+        let r = UdpProbeBackend::new(port).ping_once(LO, 0).await;
+        assert!(matches!(r, PingResult::Silent), "{r:?}");
+        drop(s);
+    }
+
+    #[tokio::test]
+    async fn tcp_unroutable_times_out_or_is_rejected() {
+        // TEST-NET-1: sandbox may drop (Timeout) or answer unreachable.
+        let r = TcpConnectBackend::new(80)
+            .ping_once(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 1)), 0)
+            .await;
+        assert!(
+            matches!(r, PingResult::Timeout | PingResult::Rejected { .. } | PingResult::Error(_)),
+            "{r:?}"
+        );
+    }
+}
