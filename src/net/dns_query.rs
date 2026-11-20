@@ -12,8 +12,8 @@
 //! see exactly what comes back. So this builds and parses `Message`s
 //! directly against `hickory_resolver::proto` - a re-export of
 //! `hickory-proto`, already pulled in transitively by the
-//! `hickory-resolver` dependency `dns.rs` already uses, so no new crate is
-//! needed - and sends them over a plain `tokio::net` UDP/TCP socket rather
+//! `hickory-resolver` dependency `dns.rs` uses as well, so no extra crate
+//! is needed - and sends them over a plain `tokio::net` UDP/TCP socket rather
 //! than a resolver-managed connection.
 //!
 //! Two entry points, both called from `dns.rs`'s `dns_worker`:

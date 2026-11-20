@@ -140,7 +140,7 @@ impl StatoriusApp {
     }
 
     pub(super) fn ui_l2_ping_tab(&mut self, ui: &mut egui::Ui) {
-        // The "L2 mode" checkbox now lives in the tab row itself; this tab
+        // The "L2 mode" checkbox lives in the tab row itself; this tab
         // is only reachable once it's actually active (see `render_tab_bar`),
         // so this is a defensive fallback rather than the normal path.
         let l2_active = matches!(self.l2_status.get(), L2Status::Active { .. });
@@ -318,8 +318,7 @@ fn parse_vlan(s: &str) -> Option<u16> {
     }
 }
 
-/// The "L2 mode" checkbox, now at the top of the L2 Ping tab (rather than
-/// the window's top-right corner), with a small colored status dot: green
+/// The "L2 mode" checkbox, shown in the tab row, with a small colored status dot: green
 /// once active and confirmed working, red if activation failed, neutral
 /// otherwise (inactive / still starting - neither a success nor a failure
 /// yet). Checked state, label, and hover text all come straight from
@@ -457,9 +456,8 @@ fn render_l2_phase_indicator(ui: &mut egui::Ui, phase: L2Phase, duplicate_macs: 
 }
 
 /// Same stop/play/delete pattern as `render_controls` on the plain Ping tab,
-/// for the L2 pinger list - keyed by (source_ip, target) now rather than
-/// target alone, since the same target might be tracked from more than one
-/// candidate source.
+/// for the L2 pinger list - keyed by (source_ip, target), since the same
+/// target can be tracked from more than one candidate source.
 fn render_l2_pinger_controls(
     ui: &mut egui::Ui,
     entry: &L2PingEntry,

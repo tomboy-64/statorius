@@ -5,8 +5,7 @@
 //! Mirrors `state::SharedState`/`net::ping_worker`'s pattern for status
 //! (commands in over a channel, status read out via a shared snapshot), and
 //! adds a second channel (`L2JobRequest`) for anything that actually wants
-//! to *use* L2 once it's active - today that's `net::l2_pinger`, but the
-//! same channel is exactly what a future TCP/UDP L2 scan would use too.
+//! to *use* L2 once it's active (`net::l2_pinger`).
 
 use std::collections::HashMap;
 use std::env;

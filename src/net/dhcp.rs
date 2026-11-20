@@ -4,15 +4,14 @@
 //! log - there's no DHCP client or server here, and nothing it does ever
 //! sends a packet.
 //!
-//! Option **names** (and, for a growing subset, how to render their
-//! **value**) come from a bundled lookup table (`dhcp_options.json`,
-//! embedded into the binary at compile time via `include_str!` and parsed
-//! once on first use) rather than being hardcoded in this file. Only a
-//! modest set of the best-known options carry a real `format` hint for now
-//! - see the comment at the top of that file. Everything else still gets
-//! its correct IANA-registered name, just rendered as a plain hex dump of
-//! its raw bytes until a format is added for it - extending coverage later
-//! is a matter of editing the JSON, not this module.
+//! Option **names** (and, for a subset, how to render their **value**)
+//! come from a bundled lookup table (`dhcp_options.json`, embedded into
+//! the binary at compile time via `include_str!` and parsed once on first
+//! use) rather than being hardcoded in this file. Only the best-known
+//! options carry a `format` hint - see the comment at the top of that
+//! file. Every other option gets its IANA-registered name and is rendered
+//! as a plain hex dump of its raw bytes. Decoding coverage is extended by
+//! editing the JSON, not this module.
 
 use std::collections::{BTreeMap, HashMap};
 use std::net::Ipv4Addr;
@@ -226,8 +225,8 @@ fn non_zero(addr: Ipv4Addr) -> Option<String> {
 // compile time (`include_str!`) and parsed once on first use (a plain
 // `OnceLock`, not a build-time const - `serde_json` parsing isn't
 // `const fn`-able, and re-parsing a small embedded string once per process
-// is not worth avoiding). Extending decoding coverage later is purely a
-// matter of editing `dhcp_options.json`, never this file.
+// is not worth avoiding). Decoding coverage is extended purely by
+// editing `dhcp_options.json`, never this file.
 // ---------------------------------------------------------------------
 
 const LOOKUP_JSON: &str = include_str!("dhcp_options.json");
@@ -298,8 +297,8 @@ fn message_type_name(code: u8) -> String {
 
 /// A short explainer plus the standard an option is defined in, for the
 /// hover tooltip on that option's name in the UI - `None` if the lookup
-/// table doesn't have that information for this code yet (most of RFC
-/// 2132 and the well-known later options do; a few obscure/legacy ones are
+/// table doesn't have that information for this code (most of RFC 2132
+/// and the well-known later options do; a few obscure/legacy ones are
 /// deliberately left blank rather than guessing at an RFC number).
 pub fn option_help(code: u8) -> Option<String> {
     let def = lookup().options.get(&code)?;

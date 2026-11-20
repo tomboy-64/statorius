@@ -101,8 +101,8 @@ pub async fn ping_worker(mut rx: mpsc::Receiver<WorkerCommand>, state: SharedSta
 
                 // Build the backend up front (this is the one and only place
                 // that maps a `PingMethod` to a concrete `PingBackend` impl -
-                // a future raw-L2 method would add one match arm here and
-                // nothing else in this file would need to change).
+                // a new method adds one match arm here and nothing else in
+                // this file changes).
                 let backend: Box<dyn PingBackend> = match &request.method {
                     PingMethod::Icmp { payload_size } => {
                         match IcmpSocketBackend::new(
@@ -165,7 +165,7 @@ pub async fn ping_worker(mut rx: mpsc::Receiver<WorkerCommand>, state: SharedSta
 /// (if `count` is `Some`) until that many attempts have completed - ping,
 /// record the result, wait out `PING_INTERVAL` (checking `stop_flag`
 /// periodically), repeat. Entirely backend-agnostic - it doesn't know or care
-/// whether `backend` is today's ICMP/TCP/UDP socket or a future raw-L2 impl.
+/// whether `backend` is an ICMP/TCP/UDP socket or a raw-L2 impl.
 async fn run_continuous_ping(
     key: PingKey,
     mut backend: Box<dyn PingBackend>,

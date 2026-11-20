@@ -22,7 +22,7 @@ use super::dhcp::DhcpMessageWire;
 /// the IPC connection itself while doing so.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum L2Message {
-    /// Helper -> GUI: capability confirmed, ready for (future) L2 work.
+    /// Helper -> GUI: capability confirmed, ready for L2 work.
     Ready { detail: String },
     /// Helper -> GUI: something's wrong even after elevation.
     Failed { reason: String },

@@ -196,7 +196,7 @@ impl SharedState {
     }
 
     /// Called when a target is (re)started, so it shows up in the UI - as
-    /// "pending" the first time, unchanged if it already existed - even before
+    /// "pending" the first time, as-is if it already exists - even before
     /// the next result comes back.
     ///
     /// For an already-known target the history is kept as-is, but the label

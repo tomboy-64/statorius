@@ -1,9 +1,8 @@
 //! Layer-2 capability probing + readiness classification.
 //!
-//! Future features (raw Ethernet frame construction/injection) will need
-//! Npcap on Windows and a raw/promiscuous-capable socket on Linux. This
-//! module answers one question up front, without ever trying to acquire
-//! privileges itself: *can this process already do that, as launched, and if
+//! Raw Ethernet frame construction/injection needs Npcap on Windows and a
+//! raw/promiscuous-capable socket on Linux. This module answers one
+//! question up front, without ever trying to acquire privileges itself: *can this process already do that, as launched, and if
 //! not, would elevation plausibly fix it?*
 //!
 //! The probe prefers testing against a loopback interface when one is
@@ -16,11 +15,11 @@
 //! *not* be treated as "L2 capture is impossible here" - it just means the
 //! test has to run against a real, active interface instead.
 
-use pcap::{Capture, Device};
+use crate::pcap::{Capture, Device};
 
 /// Three-state readiness - "impossible outright" and "possible but needs
 /// elevation" need very different UI treatment (permanently disabled vs.
-/// clickable-with-a-prompt), so a plain bool isn't enough anymore.
+/// clickable-with-a-prompt), so a plain bool isn't enough.
 #[derive(Debug, Clone)]
 pub enum L2Readiness {
     /// Already works with the privileges we were launched with - activating
@@ -67,29 +66,27 @@ pub fn probe_l2_readiness() -> L2Readiness {
 }
 
 enum FindResult {
-    NoDevices(pcap::Error),
+    NoDevices(crate::pcap::Error),
     NoUsableDevice,
     Probed {
         name: String,
-        result: Result<(), pcap::Error>,
+        result: Result<(), crate::pcap::Error>,
     },
 }
 
 /// Find a device we can genuinely open in promiscuous mode, and test it.
 ///
-/// This used to pre-filter candidates with `d.flags.is_up() &&
-/// d.flags.is_running()` before ever trying to open anything, on the
-/// assumption that a failed open would "overwhelmingly likely" be a
-/// privilege issue. On Windows that assumption doesn't hold: Npcap derives
-/// those two flags by silently opening every enumerated adapter a second
-/// time internally (`PacketOpenAdapter`, see pcap-npf.c's `get_if_flags`)
-/// just to query its hardware status via an NDIS OID. If *that* internal
-/// open fails for any reason, both flags come back false - with no error
-/// surfaced anywhere - even for an adapter this app could open here just
-/// fine a moment later. Trusting the flags over the real open attempt was
-/// misclassifying perfectly usable systems as `Unavailable`.
+/// Candidates are deliberately *not* pre-filtered by `flags.is_up()` /
+/// `flags.is_running()`: on Windows, Npcap derives those two flags by
+/// silently opening every enumerated adapter a second time internally
+/// (`PacketOpenAdapter`, see pcap-npf.c's `get_if_flags`) just to query its
+/// hardware status via an NDIS OID. If *that* internal open fails for any
+/// reason, both flags come back false - with no error surfaced anywhere -
+/// even for an adapter this app can open fine a moment later. Trusting the
+/// flags over a real open attempt would misclassify usable systems as
+/// `Unavailable`.
 ///
-/// So instead: try the loopback interface first if one exists (safest,
+/// So: try the loopback interface first if one exists (safest,
 /// since toggling promiscuous mode there can't affect real traffic), then
 /// fall through every other device pcap knows about, in enumeration order,
 /// actually attempting the open on each rather than pre-judging it by
@@ -97,8 +94,8 @@ enum FindResult {
 /// failure (as good a representative as any of "what's actually wrong
 /// here").
 ///
-/// One thing flags-based pre-filtering *was* accidentally doing for free:
-/// keeping this away from Linux's non-Ethernet pcap pseudo-devices
+/// Linux's non-Ethernet pcap pseudo-devices are the one thing that needs
+/// filtering out up front
 /// (`bluetooth0`, `nflog`, `nfqueue`, `usbmon0`, `dbus-system`, the `any`
 /// meta-device, ...). Those are real entries in `Device::list()`, but
 /// they're captured through an entirely different kernel mechanism than
@@ -130,7 +127,7 @@ fn find_probe_target_and_test() -> FindResult {
         devices.swap(0, idx);
     }
 
-    let mut last_failure: Option<(String, pcap::Error)> = None;
+    let mut last_failure: Option<(String, crate::pcap::Error)> = None;
     for device in devices {
         let name = device.name.clone();
         match try_open_promiscuous(device) {
@@ -155,7 +152,7 @@ fn find_probe_target_and_test() -> FindResult {
 /// `find_probe_target_and_test`); either way this never blocks waiting for
 /// traffic and never reads a single packet, so it's safe to run against a
 /// live interface.
-fn try_open_promiscuous(device: Device) -> Result<(), pcap::Error> {
+fn try_open_promiscuous(device: Device) -> Result<(), crate::pcap::Error> {
     let _capture = Capture::from_device(device)?
         .promisc(true)
         .snaplen(65535)

@@ -43,8 +43,7 @@ pub type L2PingerKey = (IpAddr, IpAddr);
 /// regardless of this) has passed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum L2PingMethod {
-    /// A full ICMP-over-L2 echo request/reply - today's only behavior,
-    /// still the default.
+    /// A full ICMP-over-L2 echo request/reply - the default.
     Icmp,
     /// A bare ARP (V4) / Neighbor Solicitation (V6) exchange instead -
     /// faster and simpler than a full echo, and doesn't require the target

@@ -125,9 +125,8 @@ impl StatoriusApp {
     /// here at submit time. The input box keeps the hostname as typed; the
     /// rows are keyed and sorted by IP, with the hostname shown as a label.
     /// (Mixing a hostname with literal IPs/CIDRs in the same submission
-    /// isn't supported, same as before CIDR expansion existed - the whole
-    /// input either is entirely IP/CIDR-shaped, or is tried as one
-    /// hostname.)
+    /// isn't supported - the whole input either is entirely IP/CIDR-shaped,
+    /// or is tried as one hostname.)
     fn submit_ping_target(&mut self) {
         let trimmed = self.target_input.trim().to_owned();
 
@@ -257,7 +256,7 @@ impl StatoriusApp {
                 // records would otherwise start several pingers for the one
                 // port the user typed): the first IPv4 address, or the first
                 // address if there's no IPv4 one. ICMP keeps pinging every
-                // resolved address, as before.
+                // resolved address.
                 let addrs = if matches!(method, PingMethod::Icmp { .. }) {
                     addrs
                 } else {

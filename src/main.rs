@@ -8,6 +8,7 @@
 mod app;
 mod graphics;
 mod net;
+mod pcap;
 mod state;
 
 use app::StatoriusApp;
@@ -68,9 +69,8 @@ async fn main() -> eframe::Result<()> {
     let dhcp_state = net::dhcp_state::DhcpState::new();
 
     // Separate channel for anything that actually wants to *use* L2 once
-    // it's active (ping/duplicate-check jobs) - today that's only the L2
-    // pinger list below, but it's the same channel a future TCP/UDP L2 scan
-    // would use too. The manager only ever forwards these to the helper
+    // it's active (ping/duplicate-check jobs), used by the L2 pinger list
+    // below. The manager only ever forwards these to the helper
     // while a session is Active; otherwise they fail immediately.
     let (tx_l2_jobs, rx_l2_jobs) = mpsc::channel::<net::l2_manager::L2JobRequest>(32);
 

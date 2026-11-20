@@ -84,7 +84,7 @@ fn sniffer_loop(
                     }
                 }
             }
-            Err(pcap::Error::TimeoutExpired) => continue,
+            Err(crate::pcap::Error::TimeoutExpired) => continue,
             Err(_) => continue, // a single bad read shouldn't kill the sniffer
         }
     }

@@ -3,9 +3,8 @@
 //!
 //! Kept deliberately protocol-agnostic where it can be: Ethernet framing
 //! (with optional 802.1Q VLAN tagging) and IPv4/IPv6 wrapping are shared by
-//! *every* L2 scan method. Only the L4 payload build/match (ICMP echo today;
-//! TCP connect-scan and UDP null-scan later) is method-specific - see
-//! `l2_engine.rs` for where that split happens.
+//! *every* L2 scan method. Only the L4 payload build/match (ICMP echo) is
+//! method-specific - see `l2_engine.rs` for where that split happens.
 //!
 //! IPv6 support mirrors IPv4 throughout: ARP's role is played by NDP
 //! (Neighbor Solicitation/Advertisement, RFC 4861) for address resolution
@@ -112,12 +111,8 @@ impl InterfaceContext {
 
 /// Resolve the machine's default network interface (name, MAC, IPv4/IPv6
 /// address+prefix, gateways) via `default-net`. This is what "which
-/// interface do we actually send raw frames on" comes down to for now - a
-/// future version could let the user pick a specific interface instead of
-/// always using the default one. The IPv6 fields were added by symmetry
-/// with the IPv4 ones below rather than independently confirmed - if a
-/// compile error lands here, check them against `default-net`'s actual
-/// field/method names first.
+/// interface do we actually send raw frames on" comes down to: always the
+/// default one, never a user-selected interface.
 pub fn resolve_default_interface() -> Result<InterfaceContext, String> {
     let iface = default_net::get_default_interface()
         .map_err(|e| format!("Could not determine the default network interface: {e}"))?;
@@ -516,12 +511,12 @@ fn read_lladdr_option(
 }
 
 // ---------------------------------------------------------------------
-// IPv4 - shared wrapper for every L4 protocol (ICMP now, TCP/UDP later).
+// IPv4 - shared wrapper for every L4 protocol.
 // ---------------------------------------------------------------------
 
 /// Build an IPv4 header + `l4_payload`, with a correct header checksum.
-/// `protocol` selects the L4 type (e.g. `IpNextHeaderProtocols::Icmp` today;
-/// `Tcp`/`Udp` for future scan methods reuse this exact function).
+/// `protocol` selects the L4 type (e.g. `IpNextHeaderProtocols::Icmp`,
+/// `Tcp` or `Udp`).
 pub fn build_ipv4_packet(
     src: Ipv4Addr,
     dst: Ipv4Addr,
@@ -582,11 +577,10 @@ pub fn icmp_protocol() -> pnet_packet::ip::IpNextHeaderProtocol {
 }
 
 // ---------------------------------------------------------------------
-// UDP - shared L4 parsing for anything riding over it. Today that's just
-// the DHCP sniffer (`net::dhcp_sniffer`), listening for the well-known
-// server/client ports; a future mDNS/SSDP/etc. listener would reuse this
-// same parse. There's no `build_udp_packet` here (nothing in this codebase
-// sends UDP yet) - only the receive side is needed.
+// UDP - shared L4 parsing for anything riding over it: the DHCP sniffer
+// (`net::dhcp_sniffer`) listens for the well-known server/client ports with
+// it. There's no `build_udp_packet` here (nothing in this codebase sends
+// UDP over L2) - only the receive side is needed.
 // ---------------------------------------------------------------------
 
 pub const UDP_HEADER_LEN: usize = 8;
@@ -686,8 +680,7 @@ pub fn icmp_echo_hop_limit() -> u8 {
 }
 
 // ---------------------------------------------------------------------
-// ICMP echo (v4) - today's only L4 scan method for IPv4; TCP-SYN/UDP-null
-// are the natural next additions alongside this, reusing everything above.
+// ICMP echo (v4) - the L4 scan method for IPv4, built on everything above.
 // ---------------------------------------------------------------------
 
 /// Build an ICMP echo request payload (checksummed) for `identifier`/`sequence`.

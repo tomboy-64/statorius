@@ -5,7 +5,7 @@ use image::{Rgba, RgbaImage};
 /// only `ico/statorius.ico` (referenced directly by `wix/main.wxs`, which
 /// needs a stable path rather than something under `OUT_DIR`) and the
 /// Linux `ico/hicolor/*` set (installed by `arch/PKGBUILD`, outside of
-/// Cargo entirely) are still checked into the repo as separate files.
+/// Cargo entirely) are checked into the repo as separate files.
 const MASTER_ICON_PATH: &str = "ico/statorius-master.png";
 
 /// Resizes `src` to `size`x`size`, premultiplying alpha before the Lanczos3

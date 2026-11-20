@@ -28,15 +28,13 @@ impl StatoriusApp {
     /// applies it - same shape as `ping_tab`'s `poll_dns_resolution`.
     /// Called once per frame while the Interfaces tab is shown.
     ///
-    /// Deliberately does NOT touch `interfaces_open` here - sizing that to
-    /// match `interfaces` used to happen only on this completion path,
-    /// which left a real gap: `interfaces` is also populated synchronously
-    /// once at startup (`StatoriusApp::new`), so the very first time this
-    /// tab was opened - before any background refresh had a chance to
-    /// finish - the render loop below would index into a still-empty
-    /// `interfaces_open` and panic immediately. `interface_open_state`
-    /// grows the vec on demand instead, so there's no ordering between the
-    /// two lists to keep in sync at all, here or anywhere else.
+    /// Deliberately does NOT touch `interfaces_open`: `interfaces` is also
+    /// populated synchronously at startup (`StatoriusApp::new`), before any
+    /// background refresh has finished, so sizing `interfaces_open` on this
+    /// completion path alone would leave the render loop indexing into a
+    /// still-empty vec. `interface_open_state` grows the vec on demand
+    /// instead, so there's no ordering between the two lists to keep in
+    /// sync, here or anywhere else.
     fn poll_interfaces_refresh(&mut self) {
         let Some(rx) = &mut self.interfaces_refresh_rx else {
             return;
@@ -220,8 +218,8 @@ impl StatoriusApp {
 /// aren't small/contiguous, and `interfaces` can legitimately be populated
 /// (at startup, or by a background refresh) before `interfaces_open` has
 /// ever been sized to match - so every access goes through here rather
-/// than a raw `open[index]`, which would panic (and previously did) the
-/// moment those two ever got out of step.
+/// than a raw `open[index]`, which would panic as soon as those two get
+/// out of step.
 fn interface_open_state(open: &mut Vec<(bool, bool, bool)>, index: usize) -> &mut (bool, bool, bool) {
     if index >= open.len() {
         open.resize(index + 1, (false, false, false));

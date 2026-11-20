@@ -6,7 +6,7 @@
 //! take.
 //!
 //! Every job branches on `IpAddr::V4`/`V6` right at the top - V4 uses ARP +
-//! ICMPv4 (as before), V6 uses NDP + ICMPv6 (see `l2_frame` for both). The
+//! ICMPv4, V6 uses NDP + ICMPv6 (see `l2_frame` for both). The
 //! actual send/wait/match loop shape is identical either way; only frame
 //! construction and reply matching differ.
 //!
@@ -19,11 +19,10 @@
 //! address" resolution request `resolve_mac` sends when actually routing a
 //! ping.
 //!
-//! `L2Job` is deliberately the extension point for future scan methods -
-//! `ArpPing` (below) is the first of those; a `TcpConnectScan`/`UdpNullScan`
-//! variant would follow the same shape, reusing `l2_frame`'s Ethernet/VLAN/
-//! IPv4/IPv6 building blocks and this same one-at-a-time processing loop -
-//! only the L4 build/match logic in a new `do_*` function would be new.
+//! `L2Job` is the extension point for scan methods: each variant (e.g.
+//! `ArpPing`) is handled by its own `do_*` function, reusing `l2_frame`'s
+//! Ethernet/VLAN/IPv4/IPv6 building blocks and this one-at-a-time
+//! processing loop - only the L4 build/match logic is specific to a method.
 
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
@@ -227,18 +226,18 @@ fn engine_loop(
 /// name-only match here silently failed on every Windows machine
 /// regardless of privileges. Matching by address sidesteps the naming
 /// convention entirely.
-pub(crate) fn open_capture(ctx: &InterfaceContext) -> Result<pcap::Capture<pcap::Active>, pcap::Error> {
+pub(crate) fn open_capture(ctx: &InterfaceContext) -> Result<crate::pcap::Capture<crate::pcap::Active>, crate::pcap::Error> {
     let target_ip = IpAddr::V4(ctx.ipv4);
-    let device = pcap::Device::list()?
+    let device = crate::pcap::Device::list()?
         .into_iter()
         .find(|d| d.name == ctx.name || d.addresses.iter().any(|a| a.addr == target_ip))
         .ok_or_else(|| {
-            pcap::Error::PcapError(format!(
+            crate::pcap::Error::PcapError(format!(
                 "no pcap device found matching interface '{}' (name or address {})",
                 ctx.name, ctx.ipv4
             ))
         })?;
-    pcap::Capture::from_device(device)?
+    crate::pcap::Capture::from_device(device)?
         .promisc(true)
         .snaplen(65535)
         .immediate_mode(true)
@@ -248,11 +247,10 @@ pub(crate) fn open_capture(ctx: &InterfaceContext) -> Result<pcap::Capture<pcap:
 
 /// Read captured frames for up to `deadline`, calling `on_frame` for each -
 /// return early as soon as `on_frame` returns `Some`. Shared by ARP/NDP
-/// resolution, duplicate-checking, and ICMP(v6) echo waiting; a future
-/// TCP/UDP job would use this exact same helper with a different `on_frame`
-/// matcher.
+/// resolution, duplicate-checking, and ICMP(v6) echo waiting, each with its
+/// own `on_frame` matcher.
 fn read_until<T>(
-    cap: &mut pcap::Capture<pcap::Active>,
+    cap: &mut crate::pcap::Capture<crate::pcap::Active>,
     deadline: Instant,
     mut on_frame: impl FnMut(&[u8]) -> Option<T>,
 ) -> Option<T> {
@@ -263,7 +261,7 @@ fn read_until<T>(
                     return Some(result);
                 }
             }
-            Err(pcap::Error::TimeoutExpired) => continue,
+            Err(crate::pcap::Error::TimeoutExpired) => continue,
             Err(_) => continue, // a single bad read shouldn't abort the whole wait
         }
     }
@@ -276,7 +274,7 @@ fn read_until<T>(
 /// `do_duplicate_check`, which uses an unspecified sender and deliberately
 /// keeps listening for more than one reply.
 fn resolve_mac(
-    cap: &mut pcap::Capture<pcap::Active>,
+    cap: &mut crate::pcap::Capture<crate::pcap::Active>,
     ctx: &InterfaceContext,
     cache: &mut HashMap<IpAddr, MacAddr>,
     target: IpAddr,
@@ -296,7 +294,7 @@ fn resolve_mac(
 }
 
 fn resolve_mac_v4(
-    cap: &mut pcap::Capture<pcap::Active>,
+    cap: &mut crate::pcap::Capture<crate::pcap::Active>,
     ctx: &InterfaceContext,
     target: Ipv4Addr,
     vlan: Option<u16>,
@@ -320,7 +318,7 @@ fn resolve_mac_v4(
 }
 
 fn resolve_mac_v6(
-    cap: &mut pcap::Capture<pcap::Active>,
+    cap: &mut crate::pcap::Capture<crate::pcap::Active>,
     ctx: &InterfaceContext,
     target: Ipv6Addr,
     vlan: Option<u16>,
@@ -366,7 +364,7 @@ fn resolve_mac_v6(
 }
 
 fn do_ping(
-    cap: &mut pcap::Capture<pcap::Active>,
+    cap: &mut crate::pcap::Capture<crate::pcap::Active>,
     ctx: &InterfaceContext,
     neighbor_cache: &mut HashMap<IpAddr, MacAddr>,
     source_ip: IpAddr,
@@ -389,7 +387,7 @@ fn do_ping(
 }
 
 fn do_ping_v4(
-    cap: &mut pcap::Capture<pcap::Active>,
+    cap: &mut crate::pcap::Capture<crate::pcap::Active>,
     ctx: &InterfaceContext,
     neighbor_cache: &mut HashMap<IpAddr, MacAddr>,
     source_ip: Ipv4Addr,
@@ -485,7 +483,7 @@ fn do_ping_v4(
                     }
                 }
             }
-            Err(pcap::Error::TimeoutExpired) => continue,
+            Err(crate::pcap::Error::TimeoutExpired) => continue,
             Err(_) => continue,
         }
     }
@@ -493,7 +491,7 @@ fn do_ping_v4(
 }
 
 fn do_ping_v6(
-    cap: &mut pcap::Capture<pcap::Active>,
+    cap: &mut crate::pcap::Capture<crate::pcap::Active>,
     ctx: &InterfaceContext,
     neighbor_cache: &mut HashMap<IpAddr, MacAddr>,
     source_ip: Ipv6Addr,
@@ -601,7 +599,7 @@ fn do_ping_v6(
                     }
                 }
             }
-            Err(pcap::Error::TimeoutExpired) => continue,
+            Err(crate::pcap::Error::TimeoutExpired) => continue,
             Err(_) => continue,
         }
     }
@@ -619,7 +617,7 @@ fn do_ping_v6(
 /// comment on why that's needed) - only the frame content and the reply
 /// matcher differ.
 fn do_timestamp_ping(
-    cap: &mut pcap::Capture<pcap::Active>,
+    cap: &mut crate::pcap::Capture<crate::pcap::Active>,
     ctx: &InterfaceContext,
     neighbor_cache: &mut HashMap<IpAddr, MacAddr>,
     source_ip: IpAddr,
@@ -711,7 +709,7 @@ fn do_timestamp_ping(
                     }
                 }
             }
-            Err(pcap::Error::TimeoutExpired) => continue,
+            Err(crate::pcap::Error::TimeoutExpired) => continue,
             Err(_) => continue,
         }
     }
@@ -719,7 +717,7 @@ fn do_timestamp_ping(
 }
 
 fn do_arp_ping(
-    cap: &mut pcap::Capture<pcap::Active>,
+    cap: &mut crate::pcap::Capture<crate::pcap::Active>,
     ctx: &InterfaceContext,
     source_ip: IpAddr,
     target: IpAddr,
@@ -748,7 +746,7 @@ fn do_arp_ping(
 /// (as opposed to a full ICMP ping, which can still succeed off-link via
 /// the gateway).
 fn do_arp_ping_v4(
-    cap: &mut pcap::Capture<pcap::Active>,
+    cap: &mut crate::pcap::Capture<crate::pcap::Active>,
     ctx: &InterfaceContext,
     source_ip: Ipv4Addr,
     target: Ipv4Addr,
@@ -788,7 +786,7 @@ fn do_arp_ping_v4(
 /// candidate address, not this interface's real one) is what goes on the
 /// wire as the solicitation's source, not `ctx.ipv6`.
 fn do_arp_ping_v6(
-    cap: &mut pcap::Capture<pcap::Active>,
+    cap: &mut crate::pcap::Capture<crate::pcap::Active>,
     ctx: &InterfaceContext,
     source_ip: Ipv6Addr,
     target: Ipv6Addr,
@@ -835,7 +833,7 @@ fn do_arp_ping_v6(
 }
 
 fn do_duplicate_check(
-    cap: &mut pcap::Capture<pcap::Active>,
+    cap: &mut crate::pcap::Capture<crate::pcap::Active>,
     ctx: &InterfaceContext,
     candidate: IpAddr,
     vlan: Option<u16>,
@@ -858,7 +856,7 @@ fn do_duplicate_check(
 /// simply doesn't answer within the window will still be missed (see the
 /// explanation given alongside this feature).
 fn do_duplicate_check_v4(
-    cap: &mut pcap::Capture<pcap::Active>,
+    cap: &mut crate::pcap::Capture<crate::pcap::Active>,
     ctx: &InterfaceContext,
     candidate: Ipv4Addr,
     vlan: Option<u16>,
@@ -889,7 +887,7 @@ fn do_duplicate_check_v4(
                     seen.push(sender_mac);
                 }
             }
-            Err(pcap::Error::TimeoutExpired) => continue,
+            Err(crate::pcap::Error::TimeoutExpired) => continue,
             Err(_) => continue,
         }
     }
@@ -910,7 +908,7 @@ fn do_duplicate_check_v4(
 /// way, since it's inherently a check against `candidate`, not against
 /// whatever we might already have.
 fn do_duplicate_check_v6(
-    cap: &mut pcap::Capture<pcap::Active>,
+    cap: &mut crate::pcap::Capture<crate::pcap::Active>,
     ctx: &InterfaceContext,
     candidate: Ipv6Addr,
     vlan: Option<u16>,
@@ -957,7 +955,7 @@ fn do_duplicate_check_v6(
                     seen.push(mac);
                 }
             }
-            Err(pcap::Error::TimeoutExpired) => continue,
+            Err(crate::pcap::Error::TimeoutExpired) => continue,
             Err(_) => continue,
         }
     }

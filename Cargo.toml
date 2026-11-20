@@ -1,6 +1,6 @@
 [package]
 name = "statorius"
-version = "0.7.17"
+version = "0.8.0"
 edition = "2024"
 license = "AGPL-3.0-only"
 
@@ -16,9 +16,10 @@ tokio = { version = "1.53.2", features = ["full"] } # Async runtime
 surge-ping = "0.9.1" # Async ICMP
 # Useful for retrieving local IPs
 default-net = "0.22.0"
-# L2 capability probing now, raw Ethernet frame capture/injection later
-# (Npcap on Windows, libpcap on Linux)
-pcap = "2.5.0"
+# Loads Npcap (wpcap.dll) / libpcap at runtime - see src/pcap.rs. Not linked
+# at build time, so the executable starts without Npcap installed and no
+# Npcap SDK is needed to build.
+libloading = "0.8"
 # Lets PingBackend be a plain `async fn`-based trait usable as `Box<dyn PingBackend>`
 async-trait = "0.1.92"
 # Raw Ethernet/VLAN/ARP/IPv4/ICMP frame construction+parsing for L2 pings.

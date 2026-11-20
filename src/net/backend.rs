@@ -2,9 +2,9 @@
 //!
 //! `run_continuous_ping` (in `net::mod`) only ever talks to a
 //! `Box<dyn PingBackend>` - it doesn't know or care whether a ping happens
-//! over a plain ICMP/TCP/UDP socket (today) or a hand-built Ethernet/IP
-//! frame injected via Npcap/libpcap (the L2 side). Every new ping method
-//! just needs a new `PingBackend` impl; the continuous-ping loop, history
+//! over a plain ICMP/TCP/UDP socket or a hand-built Ethernet/IP frame
+//! injected via Npcap/libpcap (the L2 side). Every ping method is one
+//! `PingBackend` impl; the continuous-ping loop, history
 //! tracking, and start/stop/delete plumbing in `net::mod` and `state` never
 //! have to change.
 
@@ -32,7 +32,7 @@ pub trait PingBackend: Send {
     async fn ping_once(&mut self, target: IpAddr, seq: u16) -> PingResult;
 }
 
-/// Today's ICMP backend: a single long-lived `surge_ping::Pinger` per target -
+/// ICMP backend: a single long-lived `surge_ping::Pinger` per target -
 /// one identifier for the whole continuous-ping session, incrementing
 /// sequence numbers per round, exactly what a real `ping` conversation looks
 /// like on the wire.

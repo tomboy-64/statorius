@@ -149,7 +149,7 @@ fn render_dhcp_message(ui: &mut egui::Ui, xid: u32, index: usize, msg: &DhcpMess
 }
 
 /// `ciaddr`/`yiaddr`/`siaddr`/`giaddr` mean four different, easily-confused
-/// things - shown inline as before, just in a slightly brighter shade than
+/// things - shown inline, in a slightly brighter shade than
 /// normal body text, with a hover tooltip on each spelling out what that
 /// particular field means and when it's actually set.
 fn render_address_highlights(ui: &mut egui::Ui, msg: &DhcpMessageWire) {
