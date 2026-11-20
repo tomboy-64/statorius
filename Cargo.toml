@@ -1,6 +1,6 @@
 [package]
 name = "statorius"
-version = "0.8.0"
+version = "0.8.1"
 edition = "2024"
 license = "AGPL-3.0-only"
 
@@ -19,7 +19,7 @@ default-net = "0.22.0"
 # Loads Npcap (wpcap.dll) / libpcap at runtime - see src/pcap.rs. Not linked
 # at build time, so the executable starts without Npcap installed and no
 # Npcap SDK is needed to build.
-libloading = "0.8"
+libloading = "0.8.9"
 # Lets PingBackend be a plain `async fn`-based trait usable as `Box<dyn PingBackend>`
 async-trait = "0.1.92"
 # Raw Ethernet/VLAN/ARP/IPv4/ICMP frame construction+parsing for L2 pings.
@@ -44,7 +44,6 @@ hickory-resolver = "0.26.3"
 # Wire format for the GUI <-> elevated L2 helper IPC protocol
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
-windows-sys = "0.61.2"
 
 # Windows-only: ShellExecuteW's "runas" verb, to UAC-elevate the L2 helper
 [target.'cfg(windows)'.dependencies]
