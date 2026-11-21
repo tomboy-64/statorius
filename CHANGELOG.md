@@ -6,6 +6,12 @@
 - The release workflow no longer installs the Npcap SDK or libpcap-dev.
 - `windows-sys` is a Windows-only dependency (no unused-dependency warning on Linux).
 - The release workflow runs the unit tests on Linux and Windows for every push; a release build requires them to pass. On Linux the pcap tests also run once with raw-socket privileges.
+- The About tab scrolls as a whole.
+- Graphics backends the machine cannot offer are greyed out in the About tab, with the missing library (Vulkan/EGL loader) or driver and the package to install.
+- If the window cannot be created after a backend was selected (broken driver), the app relaunches on the next backend (Vulkan, OpenGL, DirectX 12); `WGPU_BACKEND` set by the user is never overridden. The About tab notes an automatic fallback.
+- If the window cannot be created at all, the error is shown in a dialog (`MessageBoxW` on Windows, `zenity`/`kdialog` on Linux), printed to stderr and written to `startup-error.log` in the config directory, with the libraries to install. Release builds on Windows previously exited without any message.
+- Tests for backend selection, saving the setting, the fallback decision, library probing and the error report.
+- Dependencies for the GUI libraries that are loaded at runtime (checked by starting the app under Xvfb with single libraries removed): the `.deb` depends on the X11 and xkbcommon-x11 libraries plus Vulkan or EGL, and recommends the Wayland libraries, Mesa drivers, libpcap and pkexec; `arch/PKGBUILD` depends on the X11 libraries and lists the rest (and polkit) as optional.
 - `arch/PKGBUILD` is at 0.8.2.
 
 ## 0.8.0

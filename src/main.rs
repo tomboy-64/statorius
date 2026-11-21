@@ -9,6 +9,7 @@ mod app;
 mod graphics;
 mod net;
 mod pcap;
+mod startup_failure;
 mod state;
 
 use app::StatoriusApp;
@@ -119,7 +120,7 @@ async fn main() -> eframe::Result<()> {
     let backend_choice = graphics::BackendChoice::load();
     graphics::apply(&mut options, backend_choice);
 
-    eframe::run_native(
+    let result = eframe::run_native(
         "Statorius",
         options,
         Box::new(move |cc| {
@@ -158,5 +159,13 @@ async fn main() -> eframe::Result<()> {
                 graphics_panel,
             )))
         }),
-    )
+    );
+
+    // The window couldn't be created: retry on another graphics backend or
+    // report why (see `startup_failure`) - the process never returns an
+    // error silently.
+    if let Err(error) = &result {
+        startup_failure::handle(error, backend_choice);
+    }
+    Ok(())
 }

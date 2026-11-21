@@ -19,7 +19,7 @@ A desktop tool (Rust, egui) for probing and inspecting networks. Windows and Lin
 
 **Interfaces** - network adapters with addresses, gateways and flags.
 
-**About** - version, license, and the graphics backend in use (Vulkan, then OpenGL, then others) with a switch; `WGPU_BACKEND` overrides it.
+**About** - version, license, and the graphics backend in use (Vulkan, then OpenGL, then others) with a switch; backends the machine cannot offer are greyed out with the missing library or driver named. `WGPU_BACKEND` overrides the setting. If the window cannot be created on the selected backend the app relaunches on the next one; if none works it shows an error dialog and writes `startup-error.log` to the config directory (`%APPDATA%\Statorius` or `~/.config/statorius`).
 
 ## Planned features
 

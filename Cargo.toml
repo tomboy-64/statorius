@@ -17,13 +17,18 @@ license-file = ["LICENSE", "0"]
 section = "net"
 priority = "optional"
 extended-description = "Statorius is a desktop toolbox for probing and inspecting networks: ICMP/TCP/UDP ping, L2 ping, DHCP monitoring, DNS queries and an interface overview."
-# `$auto` resolves the linked libraries (glibc, ...). Everything below is
-# opened or started at runtime and therefore invisible to that detection, and
-# optional: without libpcap only the L2 features (L2 Ping, DHCP) are
-# unavailable (src/pcap.rs); without pkexec L2 mode can't elevate its helper.
-# `libpcap0.8t64` is libpcap's name since Ubuntu 24.04 / Debian 13.
-depends = "$auto"
-recommends = "libpcap0.8t64 | libpcap0.8, pkexec | policykit-1"
+# `$auto` resolves the linked libraries (glibc, ...). The GUI's window system,
+# keyboard and graphics libraries are opened at runtime (winit, wgpu), so
+# that detection can't see them; they are listed by hand. Depends = what a
+# window needs to open on X11 (also covers XWayland) - startup fails without
+# any of the X11 libraries or xkbcommon-x11 - plus Vulkan or EGL for
+# rendering (either one is enough). Recommends = the Wayland libraries (only
+# used in a Wayland session), the Mesa drivers, and the L2 features' needs:
+# without libpcap only L2 Ping and DHCP are unavailable (src/pcap.rs), without
+# pkexec L2 mode can't elevate its helper. `libpcap0.8t64` is libpcap's name
+# since Ubuntu 24.04 / Debian 13.
+depends = "$auto, libx11-6, libx11-xcb1, libxcursor1, libxi6, libxkbcommon0, libxkbcommon-x11-0, libvulkan1 | libegl1"
+recommends = "libpcap0.8t64 | libpcap0.8, pkexec | policykit-1, libwayland-client0, libwayland-cursor0, libwayland-egl1, mesa-vulkan-drivers, libgl1-mesa-dri"
 assets = [
     ["target/release/statorius", "usr/bin/", "755"],
     ["arch/statorius.desktop", "usr/share/applications/", "644"],
@@ -49,10 +54,11 @@ tokio = { version = "1.53.2", features = ["full"] } # Async runtime
 surge-ping = "0.9.1" # Async ICMP
 # Useful for retrieving local IPs
 default-net = "0.22.0"
-# Loads Npcap (wpcap.dll) / libpcap at runtime - see src/pcap.rs. Not linked
-# at build time, so the executable starts without Npcap installed and no
-# Npcap SDK is needed to build.
-libloading = "0.8.9"
+# Loads Npcap (wpcap.dll) / libpcap at runtime - see src/pcap.rs - and probes
+# the Vulkan/EGL loaders for the About tab and the startup error report - see
+# src/graphics.rs. Neither is linked at build time, so the executable starts
+# without them and no Npcap SDK is needed to build.
+libloading = "0.8"
 # Lets PingBackend be a plain `async fn`-based trait usable as `Box<dyn PingBackend>`
 async-trait = "0.1.92"
 # Raw Ethernet/VLAN/ARP/IPv4/ICMP frame construction+parsing for L2 pings.
@@ -111,4 +117,4 @@ windows-sys = {
 # pattern) works on every host/target combination.
 [build-dependencies]
 image = { version = "0.25.10", default-features = false, features = ["png", "ico"] }
-winresource = "0.1.34"
+winresource = "0.1.31"
