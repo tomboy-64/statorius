@@ -322,6 +322,9 @@ mod tests {
         let r = TcpConnectBackend::new(port).ping_once(LO, 0).await;
         match r {
             PingResult::Rejected { short, .. } => assert_eq!(short, "refused (RST)"),
+            // Windows retransmits the SYN after a RST for about as long as
+            // the probe's timeout, so the attempt can end as a timeout there.
+            PingResult::Timeout if cfg!(windows) => {}
             other => panic!("{other:?}"),
         }
     }

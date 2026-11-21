@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.8.2
+
+- `.deb` package for Debian/Ubuntu, built by the release workflow with `cargo-deb` from `[package.metadata.deb]` in `Cargo.toml`. libpcap and pkexec are recommended packages, since only the L2 features need them. Includes the desktop entry and icons.
+- The release workflow no longer installs the Npcap SDK or libpcap-dev.
+- `windows-sys` is a Windows-only dependency (no unused-dependency warning on Linux).
+- The release workflow runs the unit tests on Linux and Windows for every push; a release build requires them to pass. On Linux the pcap tests also run once with raw-socket privileges.
+- `arch/PKGBUILD` is at 0.8.2.
+
 ## 0.8.0
 
 ### Ping
@@ -16,4 +24,4 @@
 - Npcap/libpcap are loaded at runtime instead of being linked: the executable starts without Npcap, only the L2 features need it. The `pcap` crate is replaced by `src/pcap.rs`; the Npcap SDK is no longer needed to build.
 - Unit tests for the TCP/UDP backends, pinger identity and the pcap binding.
 - Documentation rewritten to describe the current behavior.
-- `arch/PKGBUILD` is at 0.8.0 and lists libpcap as an optional dependency.
+- `arch/PKGBUILD` lists libpcap as an optional dependency.

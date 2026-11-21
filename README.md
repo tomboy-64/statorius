@@ -37,6 +37,16 @@ cargo build --release
 
 Npcap (`wpcap.dll`) and libpcap are loaded at runtime (see `src/pcap.rs`), so neither a Npcap SDK nor libpcap development files are needed to build, and the executable starts without them. Without the library only the L2 features (L2 Ping, DHCP) are unavailable.
 
+Tests: `cargo test` (CI runs them on Linux and Windows; tests needing raw-socket privileges skip themselves without them).
+
+Debian/Ubuntu package (version, description and recommended packages come from `[package.metadata.deb]` in `Cargo.toml`):
+
+```bash
+cargo install cargo-deb
+cargo build --release
+cargo deb --no-build   # -> target/debian/statorius_<version>-1_amd64.deb
+```
+
 Cross-compiling for Windows from Linux: see [cross_compile_for_windows.md](cross_compile_for_windows.md).
 
 ## License

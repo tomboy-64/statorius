@@ -1,8 +1,41 @@
 [package]
 name = "statorius"
-version = "0.8.1"
+version = "0.8.2"
 edition = "2024"
 license = "AGPL-3.0-only"
+description = "Network probing toolbox: ICMP/TCP/UDP and L2 ping, DHCP monitoring, DNS queries"
+
+# Debian/Ubuntu package, built with `cargo deb` (cargo-deb) - see
+# .github/workflows/release.yml. Version, description and license come from
+# [package] above, so a release needs no second place to keep in sync (unlike
+# arch/PKGBUILD, which the pre-commit hook has to track).
+[package.metadata.deb]
+# Same placeholder as arch/PKGBUILD; replace with the real maintainer.
+maintainer = "Your Name <your.email@example.com>"
+copyright = "Your Name"
+license-file = ["LICENSE", "0"]
+section = "net"
+priority = "optional"
+extended-description = "Statorius is a desktop toolbox for probing and inspecting networks: ICMP/TCP/UDP ping, L2 ping, DHCP monitoring, DNS queries and an interface overview."
+# `$auto` resolves the linked libraries (glibc, ...). Everything below is
+# opened or started at runtime and therefore invisible to that detection, and
+# optional: without libpcap only the L2 features (L2 Ping, DHCP) are
+# unavailable (src/pcap.rs); without pkexec L2 mode can't elevate its helper.
+# `libpcap0.8t64` is libpcap's name since Ubuntu 24.04 / Debian 13.
+depends = "$auto"
+recommends = "libpcap0.8t64 | libpcap0.8, pkexec | policykit-1"
+assets = [
+    ["target/release/statorius", "usr/bin/", "755"],
+    ["arch/statorius.desktop", "usr/share/applications/", "644"],
+    # One entry per size under ico/hicolor/ (a glob would flatten the
+    # directories); a new size needs a new line here.
+    ["ico/hicolor/16x16/apps/statorius.png", "usr/share/icons/hicolor/16x16/apps/", "644"],
+    ["ico/hicolor/32x32/apps/statorius.png", "usr/share/icons/hicolor/32x32/apps/", "644"],
+    ["ico/hicolor/48x48/apps/statorius.png", "usr/share/icons/hicolor/48x48/apps/", "644"],
+    ["ico/hicolor/64x64/apps/statorius.png", "usr/share/icons/hicolor/64x64/apps/", "644"],
+    ["ico/hicolor/128x128/apps/statorius.png", "usr/share/icons/hicolor/128x128/apps/", "644"],
+    ["ico/hicolor/256x256/apps/statorius.png", "usr/share/icons/hicolor/256x256/apps/", "644"],
+]
 
 [profile.release]
 lto = true          # Link Time Optimization: merges all crates into one unit
@@ -78,4 +111,4 @@ windows-sys = {
 # pattern) works on every host/target combination.
 [build-dependencies]
 image = { version = "0.25.10", default-features = false, features = ["png", "ico"] }
-winresource = "0.1.31"
+winresource = "0.1.34"

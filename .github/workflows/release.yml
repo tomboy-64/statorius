@@ -1,9 +1,9 @@
 name: Release Build
 
-# Runs on every push (any branch or tag) so the version check below always
-# runs and catches drift early - but the actual build and release only
-# ever happen for a tag matching 'v*' (e.g. v1.0.0), via the `if:` guards
-# on the build and create_release jobs further down.
+# Runs on every push (any branch or tag) so the version check and the unit
+# tests below always run and catch problems early - but the actual build and
+# release only ever happen for a tag matching 'v*' (e.g. v1.0.0), via the
+# `if:` guards on the build and create_release jobs further down.
 on:
   push:
 
@@ -52,15 +52,62 @@ jobs:
             exit 1
           fi
 
+  # Unit tests on both platforms. The build/release jobs below depend on
+  # this, so a failing test blocks a release.
+  test:
+    name: Test on ${{ matrix.os }}
+    needs: determine_version
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # One platform failing shouldn't hide the other's result.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v7
+        with:
+          # build.rs needs the real ico/statorius-master.png (see below).
+          lfs: true
+
+      - name: Install Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry and build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      # Not needed to build (libpcap is loaded at runtime), but lets the
+      # pcap binding test run against the real library instead of only
+      # exercising the "library missing" path. Windows has no Npcap here, so
+      # that runner covers the missing-library path.
+      - name: Install libpcap (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libpcap0.8t64
+
+      - name: Run unit tests
+        run: cargo test --locked
+
+      # Loopback capture/injection needs CAP_NET_RAW: without it those tests
+      # skip themselves above. Run the pcap tests again as root, on the
+      # already-built test binary so nothing is rebuilt as root.
+      - name: Run pcap tests with raw-socket privileges (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          TEST_BIN=$(cargo test --locked --no-run --message-format=json \
+            | jq -r 'select(.profile.test == true and .executable != null) | .executable' | head -n1)
+          echo "Test binary: $TEST_BIN"
+          sudo "$TEST_BIN" pcap::
+
   build:
     name: Build on ${{ matrix.os }}
-    needs: determine_version
+    needs: [determine_version, test]
     # Actual builds only happen for a 'v*' tag push - see the top-level
     # comment on `on:`. A plain branch push stops after determine_version.
     if: github.ref_type == 'tag' && startsWith(github.ref_name, 'v')
     runs-on: ${{ matrix.os }}
 
-    # Run two jobs in parallel: one on Linux, one on Windows[cite: 2]
+    # Run two jobs in parallel: one on Linux, one on Windows
     strategy:
       matrix:
         include:
@@ -84,23 +131,20 @@ jobs:
       - name: Install Rust Toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      # LINUX ONLY: Install the native C-headers for pcap[cite: 2]
-      - name: Install libpcap (Linux)
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libpcap-dev
-
-      # WINDOWS ONLY: Download Npcap SDK and set environment variable[cite: 2]
-      - name: Setup Npcap SDK (Windows)
-        if: runner.os == 'Windows'
-        run: |
-          Invoke-WebRequest -Uri "https://npcap.com/dist/npcap-sdk-1.16.zip" -OutFile "npcap-sdk.zip"
-          Expand-Archive -Path "npcap-sdk.zip" -DestinationPath "npcap-sdk"
-          
-          # Add the extracted library path to the MSVC LIB environment variable so link.exe can find wpcap.lib[cite: 2]
-          echo "LIB=${{ github.workspace }}\npcap-sdk\Lib\x64;$env:LIB" | Out-File -FilePath $env:GITHUB_ENV -Append
+      # Npcap/libpcap are loaded at runtime (src/pcap.rs): neither the Npcap
+      # SDK nor libpcap-dev is needed to build.
 
       - name: Build Release Binary
         run: cargo build --release
+
+      # Version, description, dependencies and file layout come from
+      # [package.metadata.deb] in Cargo.toml (the version is Cargo.toml's
+      # own), so there is nothing to update here per release.
+      - name: Build .deb Package (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          cargo install cargo-deb --locked
+          cargo deb --no-build
 
       - name: Build MSI Installer (Windows)
         if: runner.os == 'Windows'
@@ -108,12 +152,19 @@ jobs:
           cargo install cargo-wix
           cargo wix --nocapture
 
-      # Upload the finished pure .exe binary as an artifact[cite: 2]
+      # Upload the finished pure .exe binary as an artifact
       - name: Upload Binary Artifact
         uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact_name }}
           path: target/release/${{ matrix.binary_name }}
+
+      - name: Upload .deb Artifact (Linux)
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v7
+        with:
+          name: statorius-debian-package
+          path: target/debian/*.deb
 
       - name: Upload MSI Artifact (Windows)
         if: runner.os == 'Windows'
@@ -122,7 +173,7 @@ jobs:
           name: statorius-windows-installer
           path: target/wix/*.msi
 
-  # Once both builds finish, create a GitHub Release and attach the binaries[cite: 2]
+  # Once both builds finish, create a GitHub Release and attach the binaries
   create_release:
     name: Create GitHub Release
     needs: [determine_version, build]
@@ -166,5 +217,6 @@ jobs:
             artifacts/statorius-linux-amd64/*
             artifacts/statorius-windows-amd64.exe/*
             artifacts/statorius-windows-installer/*
+            artifacts/statorius-debian-package/*
             arch/PKGBUILD
           generate_release_notes: true
