@@ -1,15 +1,25 @@
 # Maintainer: Your Name <your.email@example.com>
 _pkgname=statorius
 pkgname=${_pkgname}-git
-pkgver=0.8.2
+pkgver=0.8.3
 pkgrel=1
 pkgdesc="A networking toolkit (development build)"
 arch=('x86_64')
 url="https://github.com/tomboy-64/statorius"
 license=('AGPL3')
 
-depends=('glibc' 'gcc-libs')
-optdepends=('libpcap: L2 mode (raw frame capture/injection)')
+# The window system, keyboard and graphics libraries are loaded at runtime
+# (winit, wgpu). Startup fails without the X11 libraries or xkbcommon-x11 (this
+# also covers XWayland); Wayland, Vulkan and OpenGL (EGL) are alternatives
+# where at least one of Vulkan/EGL has to be present.
+depends=('glibc' 'gcc-libs' 'libx11' 'libxcursor' 'libxi' 'libxkbcommon' 'libxkbcommon-x11')
+optdepends=('libpcap: L2 mode (raw frame capture/injection)'
+            'polkit: L2 mode (elevates the L2 helper via pkexec)'
+            'wayland: Wayland windowing (otherwise X11/XWayland)'
+            'vulkan-icd-loader: Vulkan rendering (Vulkan or OpenGL is required)'
+            'vulkan-driver: Vulkan rendering (provided by your GPU driver)'
+            'libglvnd: OpenGL (EGL) rendering (Vulkan or OpenGL is required)'
+            'mesa: OpenGL rendering (open-source drivers)')
 makedepends=('rust' 'cargo' 'git' 'git-lfs')
 provides=("${_pkgname}")
 conflicts=("${_pkgname}")

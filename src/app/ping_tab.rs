@@ -5,6 +5,7 @@ use eframe::egui;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::net::dns::DnsCommand;
+use crate::net::scope;
 use crate::state::{PingEntry, PingMethod, PingRequest, WorkerCommand, DEFAULT_ICMP_PAYLOAD_SIZE};
 
 use super::widgets::{
@@ -53,7 +54,7 @@ pub(super) struct PingListLoadState {
     /// Every address collected so far: literal IPs read straight from the
     /// file (no label), plus whatever the queue has resolved as it drains
     /// (labelled with the hostname they came from).
-    resolved: Vec<(IpAddr, Option<String>)>,
+    resolved: Vec<(IpAddr, u32, Option<String>)>,
     /// `"<entry>: <reason>"` for every line that was neither a valid IP nor
     /// a hostname that resolved. The reason is always the resolver's own
     /// error message (or the specific local failure, e.g. a full send
@@ -135,7 +136,7 @@ impl StatoriusApp {
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .collect();
-        let expanded: Vec<Option<Result<Vec<IpAddr>, String>>> =
+        let expanded: Vec<Option<Result<Vec<(IpAddr, u32)>, String>>> =
             parts.iter().map(|p| expand_target_part(p)).collect();
 
         if !expanded.is_empty() && expanded.iter().all(Option::is_some) {
@@ -170,11 +171,11 @@ impl StatoriusApp {
             self.last_error = None;
             self.dns_failed_for = None;
             let mut failures = Vec::new();
-            for target in targets {
+            for (target, scope) in targets {
                 let request =
-                    PingRequest { target, method: method.clone(), count, label: None };
+                    PingRequest { target, scope, method: method.clone(), count, label: None };
                 if let Err(e) = self.tx.try_send(WorkerCommand::Start(request)) {
-                    failures.push(format!("{target}: {e}"));
+                    failures.push(format!("{}: {e}", scope::format_target(target, scope)));
                 }
             }
             if !failures.is_empty() {
@@ -273,6 +274,7 @@ impl StatoriusApp {
                 for target in addrs {
                     let request = PingRequest {
                         target,
+                        scope: 0,
                         method: method.clone(),
                         count,
                         label: Some(name.clone()),
@@ -316,17 +318,17 @@ impl StatoriusApp {
             return;
         };
 
-        // One line per address, even if it runs ICMP + TCP + UDP pingers.
-        let targets: Vec<IpAddr> = self
+        // One line per address (with its `%interface` if scoped), even if
+        // it runs ICMP + TCP + UDP pingers.
+        let targets: Vec<String> = self
             .state
             .snapshot()
             .into_iter()
-            .map(|e| e.target)
-            .collect::<std::collections::BTreeSet<_>>()
-            .into_iter()
+            .map(|e| ((e.target, e.scope), e.target_text))
+            .collect::<std::collections::BTreeMap<_, _>>()
+            .into_values()
             .collect();
-        let contents =
-            targets.iter().map(IpAddr::to_string).collect::<Vec<_>>().join(NATIVE_NEWLINE);
+        let contents = targets.join(NATIVE_NEWLINE);
 
         match std::fs::write(&path, contents) {
             Ok(()) => {
@@ -372,14 +374,16 @@ impl StatoriusApp {
 
         let mut resolved = Vec::new();
         let mut queue = VecDeque::new();
+        let mut errors = Vec::new();
         for line in contents.lines() {
             let line = line.trim();
             if line.is_empty() {
                 continue;
             }
-            match line.parse::<IpAddr>() {
-                Ok(ip) => resolved.push((ip, None)),
-                Err(_) => queue.push_back(line.to_owned()),
+            match scope::parse_literal(line) {
+                Some(Ok((ip, scope))) => resolved.push((ip, scope, None)),
+                Some(Err(reason)) => errors.push(format!("{line}: {reason}")),
+                None => queue.push_back(line.to_owned()),
             }
         }
 
@@ -390,7 +394,7 @@ impl StatoriusApp {
             queue,
             in_flight: None,
             resolved,
-            errors: Vec::new(),
+            errors,
         });
     }
 
@@ -409,7 +413,7 @@ impl StatoriusApp {
                 match rx.try_recv() {
                     Ok(Ok(addrs)) => {
                         load.resolved
-                            .extend(addrs.into_iter().map(|ip| (ip, Some(name.clone()))));
+                            .extend(addrs.into_iter().map(|ip| (ip, 0, Some(name.clone()))));
                         load.in_flight = None;
                     }
                     Ok(Err(reason)) => {
@@ -469,15 +473,16 @@ impl StatoriusApp {
         if done {
             let load = self.ping_list_load_state.take().expect("checked Some above");
             let mut failures = Vec::new();
-            for (target, label) in &load.resolved {
+            for (target, scope, label) in &load.resolved {
                 let request = PingRequest {
                     target: *target,
+                    scope: *scope,
                     method: PingMethod::Icmp { payload_size: DEFAULT_ICMP_PAYLOAD_SIZE },
                     count: None,
                     label: label.clone(),
                 };
                 if let Err(e) = self.tx.try_send(WorkerCommand::Start(request)) {
-                    failures.push(format!("{target}: {e}"));
+                    failures.push(format!("{}: {e}", scope::format_target(*target, *scope)));
                 }
             }
 
@@ -705,7 +710,7 @@ impl StatoriusApp {
                     // Read the worker's shared state directly - this IS the
                     // update mechanism, there is no separate results channel.
                     for entry in self.state.snapshot() {
-                        ui.label(entry.target.to_string());
+                        ui.label(&entry.target_text);
                         ui.label(entry.method.label())
                             .on_hover_text(entry.method.wire_description());
                         render_last_indicator(ui, &entry.last_result);
@@ -772,6 +777,7 @@ fn render_controls(ui: &mut egui::Ui, entry: &PingEntry, tx: &mpsc::Sender<Worke
             } else {
                 let request = PingRequest {
                     target: entry.target,
+                    scope: entry.scope,
                     method: entry.method.clone(),
                     count: entry.count,
                     label: entry.label.clone(),
@@ -821,9 +827,12 @@ fn ping_list_file_path(filename: &str) -> Option<PathBuf> {
 /// that clearly *looks* like a CIDR but is malformed or too large produces
 /// an actual error, since silently trying to resolve "10.0.0.0/33" as a
 /// hostname would be a worse experience than saying why it didn't work.
-fn expand_target_part(part: &str) -> Option<Result<Vec<IpAddr>, String>> {
-    if let Ok(ip) = part.parse::<IpAddr>() {
-        return Some(Ok(vec![ip]));
+fn expand_target_part(part: &str) -> Option<Result<Vec<(IpAddr, u32)>, String>> {
+    // A literal address, with the interface it needs if it is link-local
+    // (`fe80::1%eth0`); an address that can't be used as typed is an error
+    // with the reason, not a hostname to try.
+    if let Some(literal) = scope::parse_literal(part) {
+        return Some(literal.map(|target| vec![target]));
     }
     let (base, len) = part.split_once('/')?;
     let Ok(base_ip) = base.trim().parse::<IpAddr>() else {
@@ -832,7 +841,7 @@ fn expand_target_part(part: &str) -> Option<Result<Vec<IpAddr>, String>> {
     let Ok(prefix_len) = len.trim().parse::<u8>() else {
         return Some(Err(format!("'{part}': invalid prefix length")));
     };
-    Some(expand_cidr(base_ip, prefix_len))
+    Some(expand_cidr(base_ip, prefix_len).map(|addrs| addrs.into_iter().map(|ip| (ip, 0)).collect()))
 }
 
 fn expand_cidr(base: IpAddr, prefix_len: u8) -> Result<Vec<IpAddr>, String> {
@@ -874,4 +883,35 @@ fn expand_cidr_v4(base: Ipv4Addr, prefix_len: u8) -> Result<Vec<IpAddr>, String>
         _ => ((network + 1)..broadcast).map(|a| IpAddr::V4(Ipv4Addr::from(a))).collect(),
     };
     Ok(addrs)
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ip(s: &str) -> IpAddr {
+        s.parse().unwrap()
+    }
+
+    #[test]
+    fn literals_cidr_and_hostnames_are_told_apart() {
+        assert_eq!(expand_target_part("10.0.0.1"), Some(Ok(vec![(ip("10.0.0.1"), 0)])));
+        assert_eq!(
+            expand_target_part("10.0.0.0/30"),
+            Some(Ok(vec![(ip("10.0.0.1"), 0), (ip("10.0.0.2"), 0)]))
+        );
+        assert_eq!(expand_target_part("example.com"), None);
+    }
+
+    #[test]
+    fn link_local_targets_carry_their_interface() {
+        assert_eq!(expand_target_part("fe80::1%3"), Some(Ok(vec![(ip("fe80::1"), 3)])));
+        let err = expand_target_part("fe80::1").unwrap().unwrap_err();
+        assert!(err.contains("needs an interface"), "{err}");
+        assert!(expand_target_part("2001:db8::1%3").unwrap().is_err());
+    }
+
+    #[test]
+    fn ipv6_ranges_are_refused() {
+        assert!(expand_target_part("2001:db8::/64").unwrap().is_err());
+    }
 }

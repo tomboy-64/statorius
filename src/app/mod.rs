@@ -132,7 +132,7 @@ pub struct StatoriusApp {
     /// `xid` - `egui::CollapsingHeader` needs this held outside itself to
     /// stay controllable (open-by-default-until-toggled) the same way
     /// `interfaces_open` does for the Interfaces tab.
-    dhcp_open: std::collections::HashMap<u32, bool>,
+    dhcp_open: std::collections::HashMap<(crate::net::dhcp::DhcpVersion, u32), bool>,
 
     /// The OS's currently-configured DNS servers, refreshed in the
     /// background every 10s - read fresh every frame for the "DNS" tab,

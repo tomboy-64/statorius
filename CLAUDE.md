@@ -25,10 +25,11 @@ Async pattern used everywhere: the UI sends commands over an `mpsc` channel to a
 
 - `main.rs` - wires channels/tasks, window options, graphics setup, `run_native`; on failure hands over to `startup_failure`.
 - `app/` - UI. `mod.rs` (app struct, tab bar) and one file per tab: `ping_tab`, `l2_tab`, `dhcp_tab`, `dns_tab`, `interfaces_tab`, `about_tab`; `widgets.rs` shared indicators.
-- `state.rs` - ping state: a pinger is identified by `PingKey` (address, protocol, port; ICMP port 0), so ICMP/TCP/UDP pingers per address coexist. `PingResult`: `Success`, `Timeout`, `Silent` (UDP no reply = open or filtered, not a failure), `Rejected{short,detail}` (RST, ICMP unreachable, ...), `Error`.
+- `state.rs` - ping state: a pinger is identified by `PingKey` (address, interface scope for link-local IPv6, protocol, port; ICMP port 0), so ICMP/TCP/UDP pingers per address coexist. `PingResult`: `Success`, `Timeout`, `Silent` (UDP no reply = open or filtered, not a failure), `Rejected{short,detail}` (RST, ICMP unreachable, ...), `Error`.
 - `net/backend.rs` - `PingBackend` trait with ICMP (surge-ping; ICMP error replies are classified, not counted as success), TCP (kernel `connect()`, zero linger, so RST on close) and UDP null-probe backends. `net/mod.rs` - the ping worker and per-pinger loops.
-- `net/l2*.rs` - L2 mode: `l2.rs` readiness probe, `l2_manager.rs` (GUI side), `l2_helper.rs`, `l2_engine.rs` (job engine: ARP/NDP ping, ICMP echo, duplicate check), `l2_frame.rs` (Ethernet/VLAN/IP/ICMP/UDP build+parse), `l2_pinger.rs` (L2 target list), `windows_elevate.rs`.
-- `net/dhcp*.rs` - passive DHCP sniffer (runs in the helper), decoder, state; option names/formats come from `dhcp_options.json` (embedded).
+- `net/l2*.rs` - L2 mode: `l2.rs` readiness probe, `l2_manager.rs` (GUI side), `l2_helper.rs`, `l2_engine.rs` (job engine: ARP/NDP ping, ICMP echo, ICMP timestamp (IPv4 only), duplicate check), `l2_frame.rs` (Ethernet/VLAN/IP/ICMP/UDP build+parse), `l2_pinger.rs` (L2 target list), `windows_elevate.rs`.
+- `net/dhcp*.rs` - passive DHCP sniffer (runs in the helper, captures DHCPv4 and DHCPv6), decoders (`dhcp.rs` for v4 and the shared `DhcpMessageWire`, `dhcpv6.rs` for v6 incl. relay unwrapping), state grouped by `(version, xid)`; option names/formats come from `dhcp_options.json` and `dhcpv6_options.json` (embedded).
+- `net/scope.rs` - IPv6 zones for link-local ping targets (`fe80::1%eth0`): parsing/printing; the interface index travels in `PingKey::scope`, `PingRequest::scope` and into the socket address (`socket_addr` in `net/backend.rs`, `Pinger::scope_id` for ICMP).
 - `net/dns.rs` (system DNS discovery, resolution), `net/dns_query.rs` (dig-like queries, hickory-resolver).
 - `pcap.rs` - own minimal libpcap/Npcap binding, loaded at runtime with `libloading` (no `pcap` crate, no SDK, no link-time dependency). The Npcap driver itself must be installed for L2 and DHCP.
 - `graphics.rs` - backend choice (Auto/Vulkan/OpenGL/DX12) persisted in `<config dir>/graphics-backend`, adapter selector, About-tab panel (greys out unavailable backends, names the missing library), automatic relaunch on the next backend (`STATORIUS_FALLBACK` env marker), library probes. `startup_failure.rs` - log + dialog + stderr when the window can't be created.
@@ -44,10 +45,12 @@ wgpu/winit/pcap open their libraries at runtime, so package dependency detection
 - Prefer std and existing dependencies over new crates.
 - Windows-only code is `cfg(windows)`-gated and cannot be compiled on Linux without the Windows std; check such code by reading it against the `windows-sys` API.
 - Release builds on Windows have no console (`windows_subsystem`); anything that must reach the user goes through the UI or `startup_failure`.
+- Handing results back: only the changed files, or a complete archive named `*.tar.gz` (never `_tar.gz`).
 
 ## Testing notes
 
 - Unit tests cover the ping backends (loopback sockets), pinger identity, the pcap binding (loopback capture/injection, skipped without privileges), graphics selection/fallback logic and the startup report.
 - GUI behavior was checked headless: Xvfb plus Mesa software rendering, with single libraries hidden to see which are mandatory.
-- Not verified on real hardware: the Windows paths (Npcap loading, `MessageBoxW`, DX12), a Wayland session, and the fallback relaunch after a late graphics failure.
+- Not verified on real hardware: the Windows paths (Npcap loading, `MessageBoxW`, DX12), a Wayland session, and the fallback relaunch after a late graphics failure. The development sandbox kernel has no IPv6, so IPv6 behavior (scoped link-local ping, DHCPv6 on a live link) is covered by unit tests and a loopback test that skips itself without `::1`, not by runs.
+- L2 mode and DHCP capture pick the interface by its IPv4 address (`net/l2_engine.rs` `open_capture`), so an IPv6-only interface can't use them.
 - Platform quirks the tests account for: on Windows a closed loopback TCP port may end as a timeout instead of "refused", and UDP port-unreachable surfaces as `ConnectionReset`.

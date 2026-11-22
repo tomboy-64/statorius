@@ -35,13 +35,17 @@ pub enum PingProto {
     Udp,
 }
 
-/// Identity of one pinger: target address + protocol (+ port for TCP/UDP,
-/// `0` for ICMP). The same address can therefore have an ICMP, a TCP and a
-/// UDP pinger side by side, and e.g. TCP/22 next to TCP/443; (re)starting
-/// with an identical key restarts that pinger instead of adding another.
+/// Identity of one pinger: target address (+ interface for a link-local IPv6
+/// address) + protocol (+ port for TCP/UDP, `0` for ICMP). The same address
+/// can therefore have an ICMP, a TCP and a UDP pinger side by side, and e.g.
+/// TCP/22 next to TCP/443; (re)starting with an identical key restarts that
+/// pinger instead of adding another.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct PingKey {
     pub target: IpAddr,
+    /// Interface index for a link-local IPv6 target (`fe80::1%eth0`),
+    /// `0` otherwise - the same address on two links is two pingers.
+    pub scope: u32,
     pub proto: PingProto,
     pub port: u16,
 }
@@ -55,12 +59,12 @@ impl PingMethod {
         }
     }
 
-    pub fn key(&self, target: IpAddr) -> PingKey {
+    pub fn key(&self, target: IpAddr, scope: u32) -> PingKey {
         let port = match self {
             PingMethod::Icmp { .. } => 0,
             PingMethod::Tcp { port } | PingMethod::Udp { port } => *port,
         };
-        PingKey { target, proto: self.proto(), port }
+        PingKey { target, scope, proto: self.proto(), port }
     }
 
     /// Short label for the list: `ICMP`, `TCP/443`, `UDP/53`.
@@ -88,6 +92,8 @@ impl PingMethod {
 #[derive(Debug, Clone)]
 pub struct PingRequest {
     pub target: IpAddr,
+    /// Interface index for a link-local IPv6 target, `0` otherwise.
+    pub scope: u32,
     pub method: PingMethod,
     /// Stop automatically once this many attempts have completed - `None`
     /// runs until manually stopped, the default from the UI.
@@ -136,6 +142,9 @@ pub enum WorkerCommand {
 pub struct PingEntry {
     pub key: PingKey,
     pub target: IpAddr,
+    pub scope: u32,
+    /// `target` as shown in the list: `fe80::1%eth0` for a scoped address.
+    pub target_text: String,
     pub method: PingMethod,
     pub last_result: Option<PingResult>,
     pub last_updated: Option<Instant>,
@@ -164,10 +173,18 @@ pub struct PingEntry {
 }
 
 impl PingEntry {
-    fn new(target: IpAddr, method: PingMethod, count: Option<u32>, label: Option<String>) -> Self {
+    fn new(
+        target: IpAddr,
+        scope: u32,
+        method: PingMethod,
+        count: Option<u32>,
+        label: Option<String>,
+    ) -> Self {
         Self {
-            key: method.key(target),
+            key: method.key(target, scope),
             target,
+            scope,
+            target_text: crate::net::scope::format_target(target, scope),
             method,
             last_result: None,
             last_updated: None,
@@ -207,11 +224,12 @@ impl SharedState {
     pub fn ensure_target(
         &self,
         target: IpAddr,
+        scope: u32,
         method: PingMethod,
         count: Option<u32>,
         label: Option<String>,
     ) {
-        let key = method.key(target);
+        let key = method.key(target, scope);
         let mut map = self.inner.lock().unwrap();
         match map.get_mut(&key) {
             Some(entry) => {
@@ -225,7 +243,7 @@ impl SharedState {
                 }
             }
             None => {
-                map.insert(key, PingEntry::new(target, method, count, label));
+                map.insert(key, PingEntry::new(target, scope, method, count, label));
             }
         }
     }
@@ -288,15 +306,15 @@ mod tests {
     #[test]
     fn icmp_tcp_udp_coexist_and_same_key_restarts() {
         let st = SharedState::new();
-        st.ensure_target(IP, PingMethod::Icmp { payload_size: 56 }, None, None);
-        st.ensure_target(IP, PingMethod::Tcp { port: 443 }, None, None);
-        st.ensure_target(IP, PingMethod::Udp { port: 53 }, None, None);
-        st.ensure_target(IP, PingMethod::Tcp { port: 22 }, None, None);
+        st.ensure_target(IP, 0, PingMethod::Icmp { payload_size: 56 }, None, None);
+        st.ensure_target(IP, 0, PingMethod::Tcp { port: 443 }, None, None);
+        st.ensure_target(IP, 0, PingMethod::Udp { port: 53 }, None, None);
+        st.ensure_target(IP, 0, PingMethod::Tcp { port: 22 }, None, None);
         assert_eq!(st.snapshot().len(), 4);
 
         // Same key again: no new row, ICMP payload size is taken over.
-        st.ensure_target(IP, PingMethod::Icmp { payload_size: 1400 }, None, None);
-        st.ensure_target(IP, PingMethod::Tcp { port: 443 }, None, None);
+        st.ensure_target(IP, 0, PingMethod::Icmp { payload_size: 1400 }, None, None);
+        st.ensure_target(IP, 0, PingMethod::Tcp { port: 443 }, None, None);
         let snap = st.snapshot();
         assert_eq!(snap.len(), 4);
         let icmp = snap.iter().find(|e| e.key.proto == PingProto::Icmp).unwrap();
@@ -304,14 +322,28 @@ mod tests {
     }
 
     #[test]
+    fn the_same_link_local_address_on_two_interfaces_is_two_pingers() {
+        let st = SharedState::new();
+        let ll: IpAddr = "fe80::1".parse().unwrap();
+        let icmp = PingMethod::Icmp { payload_size: 56 };
+        st.ensure_target(ll, 1, icmp.clone(), None, None);
+        st.ensure_target(ll, 2, icmp.clone(), None, None);
+        st.ensure_target(ll, 2, icmp.clone(), None, None);
+        let snap = st.snapshot();
+        assert_eq!(snap.len(), 2);
+        assert!(snap.iter().all(|e| e.target_text.starts_with("fe80::1%")), "{snap:?}");
+        assert_ne!(icmp.key(ll, 1), icmp.key(ll, 2));
+    }
+
+    #[test]
     fn results_land_on_their_own_pinger_and_delete_is_scoped() {
         let st = SharedState::new();
         let tcp = PingMethod::Tcp { port: 443 };
         let udp = PingMethod::Udp { port: 443 };
-        st.ensure_target(IP, tcp.clone(), None, None);
-        st.ensure_target(IP, udp.clone(), None, None);
-        st.record_result(tcp.key(IP), PingResult::Success(Duration::from_millis(3)));
-        st.record_result(udp.key(IP), PingResult::Silent);
+        st.ensure_target(IP, 0, tcp.clone(), None, None);
+        st.ensure_target(IP, 0, udp.clone(), None, None);
+        st.record_result(tcp.key(IP, 0), PingResult::Success(Duration::from_millis(3)));
+        st.record_result(udp.key(IP, 0), PingResult::Silent);
         let snap = st.snapshot();
         let t = snap.iter().find(|e| e.key.proto == PingProto::Tcp).unwrap();
         let u = snap.iter().find(|e| e.key.proto == PingProto::Udp).unwrap();
@@ -320,10 +352,10 @@ mod tests {
         assert_eq!(t.successes, 1);
         assert_eq!(u.successes, 0);
 
-        st.remove(tcp.key(IP));
+        st.remove(tcp.key(IP, 0));
         assert_eq!(st.snapshot().len(), 1);
         // A late result for a deleted pinger must not resurrect it.
-        st.record_result(tcp.key(IP), PingResult::Timeout);
+        st.record_result(tcp.key(IP, 0), PingResult::Timeout);
         assert_eq!(st.snapshot().len(), 1);
     }
 }

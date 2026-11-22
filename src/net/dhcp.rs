@@ -1,8 +1,9 @@
-//! DHCP (RFC 2131/RFC 2132) packet parsing and option decoding, layered on
-//! top of `l2_frame`'s Ethernet/VLAN/IPv4/UDP building blocks. This module
-//! only ever *reads* captured traffic for the "DHCP" tab's passive exchange
-//! log - there's no DHCP client or server here, and nothing it does ever
-//! sends a packet.
+//! DHCPv4 (RFC 2131/RFC 2132) packet parsing and option decoding, layered on
+//! top of `l2_frame`'s Ethernet/VLAN/IPv4/UDP building blocks, plus the wire
+//! types shared with DHCPv6 (`dhcpv6.rs` decodes that into the same
+//! `DhcpMessageWire`). This module only ever *reads* captured traffic for
+//! the "DHCP" tab's passive exchange log - there's no DHCP client or server
+//! here, and nothing it does ever sends a packet.
 //!
 //! Option **names** (and, for a subset, how to render their **value**)
 //! come from a bundled lookup table (`dhcp_options.json`, embedded into
@@ -30,12 +31,30 @@ const CHADDR_RANGE: Range<usize> = 28..44;
 const SNAME_RANGE: Range<usize> = 44..108;
 const FILE_RANGE: Range<usize> = 108..236;
 
+/// Which protocol a captured message belongs to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize)]
+pub enum DhcpVersion {
+    #[default]
+    V4,
+    V6,
+}
+
+impl DhcpVersion {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::V4 => "DHCPv4",
+            Self::V6 => "DHCPv6",
+        }
+    }
+}
+
 /// One decoded option, ready for the UI - `name`, `data_type` and `value`
 /// are all already human-readable strings, so the GUI side never needs to
-/// know anything about DHCP itself.
+/// know anything about DHCP itself. (`code` is 16 bits wide for DHCPv6; a
+/// DHCPv4 option code fits in the low byte.)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DhcpOptionWire {
-    pub code: u8,
+    pub code: u16,
     pub name: String,
     /// How this option is encoded on the wire (e.g. "IPv4 address (4
     /// bytes)", "unsigned 8-bit integer") - derived from the same `format`
@@ -44,15 +63,20 @@ pub struct DhcpOptionWire {
     pub value: String,
 }
 
-/// One captured DHCP/BOOTP message, fully decoded - what the helper sends
-/// to the GUI (`L2Message::DhcpEvent`) as soon as it's captured, and what
-/// `dhcp_state::DhcpState` groups by `xid` on the GUI side.
+/// One captured DHCPv4/BOOTP or DHCPv6 message, fully decoded - what the
+/// helper sends to the GUI (`L2Message::DhcpEvent`) as soon as it's
+/// captured, and what `dhcp_state::DhcpState` groups by `(version, xid)` on
+/// the GUI side.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DhcpMessageWire {
     /// Milliseconds since the Unix epoch - `Instant`/`SystemTime` aren't
     /// serde-friendly across the IPC boundary, so this is the wire-safe
     /// form; the UI formats it for display.
     pub captured_at_unix_ms: u64,
+    #[serde(default)]
+    pub version: DhcpVersion,
+    /// The transaction id: 32 bits in DHCPv4, 24 bits in DHCPv6 (for a
+    /// relay message, that of the message it carries).
     pub xid: u32,
     /// "DHCPDISCOVER" etc. (resolved from option 53 via the lookup table),
     /// or a fallback label for BOOTP traffic that carries no option 53 at
@@ -68,6 +92,21 @@ pub struct DhcpMessageWire {
     pub giaddr: Option<String>,
     pub vlan: Option<u16>,
     pub options: Vec<DhcpOptionWire>,
+    /// DHCPv6 only: the client's and the server's DUID (options 1 and 2),
+    /// already formatted.
+    #[serde(default)]
+    pub client_duid: Option<String>,
+    #[serde(default)]
+    pub server_duid: Option<String>,
+    /// DHCPv6 only: IPv6 source and destination of the captured packet.
+    #[serde(default)]
+    pub src_ip: Option<String>,
+    #[serde(default)]
+    pub dst_ip: Option<String>,
+    /// DHCPv6 only: every address and prefix carried in the message's
+    /// IA_NA / IA_TA / IA_PD options (`2001:db8::5`, `2001:db8:1::/56`).
+    #[serde(default)]
+    pub addresses: Vec<String>,
 }
 
 /// Scan one TLV option area (RFC 2132 §2): 1 byte code, 1 byte length,
@@ -180,10 +219,7 @@ fn parse_core(payload: &[u8]) -> Option<DhcpCore> {
 /// itself, just useful context to keep attached to the message.
 pub fn parse_dhcp_message(payload: &[u8], vlan: Option<u16>) -> Option<DhcpMessageWire> {
     let core = parse_core(payload)?;
-    let captured_at_unix_ms = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0);
+    let captured_at_unix_ms = now_unix_ms();
 
     let message_type = core
         .options
@@ -200,6 +236,7 @@ pub fn parse_dhcp_message(payload: &[u8], vlan: Option<u16>) -> Option<DhcpMessa
 
     Some(DhcpMessageWire {
         captured_at_unix_ms,
+        version: DhcpVersion::V4,
         xid: core.xid,
         message_type,
         client_mac: core.client_mac.map(|m| m.to_string()),
@@ -209,7 +246,20 @@ pub fn parse_dhcp_message(payload: &[u8], vlan: Option<u16>) -> Option<DhcpMessa
         giaddr: non_zero(core.giaddr),
         vlan,
         options,
+        client_duid: None,
+        server_duid: None,
+        src_ip: None,
+        dst_ip: None,
+        addresses: Vec::new(),
     })
+}
+
+/// Milliseconds since the Unix epoch, for `captured_at_unix_ms`.
+pub(super) fn now_unix_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 fn non_zero(addr: Ipv4Addr) -> Option<String> {
@@ -300,7 +350,14 @@ fn message_type_name(code: u8) -> String {
 /// table doesn't have that information for this code (most of RFC 2132
 /// and the well-known later options do; a few obscure/legacy ones are
 /// deliberately left blank rather than guessing at an RFC number).
-pub fn option_help(code: u8) -> Option<String> {
+pub fn option_help(version: DhcpVersion, code: u16) -> Option<String> {
+    match version {
+        DhcpVersion::V4 => u8::try_from(code).ok().and_then(option_help_v4),
+        DhcpVersion::V6 => super::dhcpv6::option_help(code),
+    }
+}
+
+fn option_help_v4(code: u8) -> Option<String> {
     let def = lookup().options.get(&code)?;
     match (&def.description, &def.rfc) {
         (Some(desc), Some(rfc)) => Some(format!("{desc}\n\n{rfc}")),
@@ -315,7 +372,7 @@ pub fn option_help(code: u8) -> Option<String> {
 /// value. Kept in lock-step with `format_value` deliberately: every match
 /// arm there has a corresponding one here, so the two can never describe
 /// different encodings for the same option.
-fn type_label(format: Option<&str>) -> String {
+pub(super) fn type_label(format: Option<&str>) -> String {
     match format {
         Some("empty") => "none".to_owned(),
         Some("ipv4") => "IPv4 address (4 bytes)".to_owned(),
@@ -358,7 +415,7 @@ fn decode_option(code: u8, raw: &[u8]) -> DhcpOptionWire {
         ),
     };
     DhcpOptionWire {
-        code,
+        code: u16::from(code),
         name,
         data_type,
         value,
@@ -368,7 +425,7 @@ fn decode_option(code: u8, raw: &[u8]) -> DhcpOptionWire {
 /// Render one option's raw bytes according to its lookup-table `format`
 /// hint. Unrecognized/absent formats (including plain `"hex"`) all fall
 /// through to `format_hex` - the always-correct, if unlovely, default.
-fn format_value(format: &str, raw: &[u8]) -> String {
+pub(super) fn format_value(format: &str, raw: &[u8]) -> String {
     match format {
         "empty" => String::new(),
         "ipv4" => raw
@@ -445,7 +502,7 @@ fn format_value(format: &str, raw: &[u8]) -> String {
 
 /// `0xffffffff` (RFC 2131 §3.3: "infinite" lease) gets its own label rather
 /// than printing out as roughly 136 years.
-fn format_duration(secs: u32) -> String {
+pub(super) fn format_duration(secs: u32) -> String {
     if secs == u32::MAX {
         return "infinite".to_owned();
     }
@@ -460,7 +517,7 @@ fn format_duration(secs: u32) -> String {
     }
 }
 
-fn format_hex(raw: &[u8]) -> String {
+pub(super) fn format_hex(raw: &[u8]) -> String {
     if raw.is_empty() {
         return "(empty)".to_owned();
     }

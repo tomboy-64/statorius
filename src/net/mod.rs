@@ -1,6 +1,7 @@
 mod backend;
 pub(crate) mod dhcp;
 mod dhcp_sniffer;
+pub(crate) mod dhcpv6;
 pub(crate) mod dhcp_state;
 pub(crate) mod dns;
 pub(crate) mod dns_query;
@@ -11,6 +12,7 @@ pub(crate) mod l2_ipc;
 pub(crate) mod l2_manager;
 pub(crate) mod l2_pinger;
 pub(crate) mod l2;
+pub(crate) mod scope;
 mod windows_elevate;
 
 use std::collections::HashMap;
@@ -74,7 +76,7 @@ pub async fn ping_worker(mut rx: mpsc::Receiver<WorkerCommand>, state: SharedSta
                 let target = request.target;
                 // One loop per (address, protocol, port): the same address
                 // can run ICMP, TCP and UDP side by side.
-                let key = request.method.key(target);
+                let key = request.method.key(target, request.scope);
 
                 // Re-starting an already-running pinger (same key) replaces
                 // its loop outright. We abort the old task AND await its actual
@@ -90,6 +92,7 @@ pub async fn ping_worker(mut rx: mpsc::Receiver<WorkerCommand>, state: SharedSta
 
                 state.ensure_target(
                     target,
+                    request.scope,
                     request.method.clone(),
                     request.count,
                     request.label.clone(),
@@ -107,6 +110,7 @@ pub async fn ping_worker(mut rx: mpsc::Receiver<WorkerCommand>, state: SharedSta
                     PingMethod::Icmp { payload_size } => {
                         match IcmpSocketBackend::new(
                             target,
+                            request.scope,
                             PingIdentifier(ident),
                             *payload_size,
                             &client_v4,
@@ -122,8 +126,8 @@ pub async fn ping_worker(mut rx: mpsc::Receiver<WorkerCommand>, state: SharedSta
                             }
                         }
                     }
-                    PingMethod::Tcp { port } => Box::new(TcpConnectBackend::new(*port)),
-                    PingMethod::Udp { port } => Box::new(UdpProbeBackend::new(*port)),
+                    PingMethod::Tcp { port } => Box::new(TcpConnectBackend::new(*port, request.scope)),
+                    PingMethod::Udp { port } => Box::new(UdpProbeBackend::new(*port, request.scope)),
                 };
 
                 let stop_flag = Arc::new(AtomicBool::new(false));
