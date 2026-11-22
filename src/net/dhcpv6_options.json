@@ -1,0 +1,427 @@
+{
+  "_comment": "DHCPv6 option, message-type and status-code names, after the IANA 'Dynamic Host Configuration Protocol for IPv6 (DHCPv6)' registries (https://www.iana.org/assignments/dhcpv6-parameters/). `format` (see dhcpv6.rs's format_value) tells the UI how to render an option's value; options without one fall back to a hex dump, and codes not listed at all are shown as 'Unknown option N'. `description` + `rfc` drive the hover tooltip on the option name in the DHCP tab; both are only set where confidently known. Add or improve any of these fields here; no Rust changes needed.",
+  "message_types": [
+    {
+      "code": 1,
+      "name": "SOLICIT"
+    },
+    {
+      "code": 2,
+      "name": "ADVERTISE"
+    },
+    {
+      "code": 3,
+      "name": "REQUEST"
+    },
+    {
+      "code": 4,
+      "name": "CONFIRM"
+    },
+    {
+      "code": 5,
+      "name": "RENEW"
+    },
+    {
+      "code": 6,
+      "name": "REBIND"
+    },
+    {
+      "code": 7,
+      "name": "REPLY"
+    },
+    {
+      "code": 8,
+      "name": "RELEASE"
+    },
+    {
+      "code": 9,
+      "name": "DECLINE"
+    },
+    {
+      "code": 10,
+      "name": "RECONFIGURE"
+    },
+    {
+      "code": 11,
+      "name": "INFORMATION-REQUEST"
+    },
+    {
+      "code": 12,
+      "name": "RELAY-FORW"
+    },
+    {
+      "code": 13,
+      "name": "RELAY-REPL"
+    },
+    {
+      "code": 14,
+      "name": "LEASEQUERY"
+    },
+    {
+      "code": 15,
+      "name": "LEASEQUERY-REPLY"
+    },
+    {
+      "code": 16,
+      "name": "LEASEQUERY-DONE"
+    },
+    {
+      "code": 17,
+      "name": "LEASEQUERY-DATA"
+    }
+  ],
+  "status_codes": [
+    {
+      "code": 0,
+      "name": "Success"
+    },
+    {
+      "code": 1,
+      "name": "UnspecFail"
+    },
+    {
+      "code": 2,
+      "name": "NoAddrsAvail"
+    },
+    {
+      "code": 3,
+      "name": "NoBinding"
+    },
+    {
+      "code": 4,
+      "name": "NotOnLink"
+    },
+    {
+      "code": 5,
+      "name": "UseMulticast"
+    },
+    {
+      "code": 6,
+      "name": "NoPrefixAvail"
+    }
+  ],
+  "options": [
+    {
+      "code": 1,
+      "name": "Client Identifier",
+      "format": "duid",
+      "rfc": "RFC 8415",
+      "description": "Identifies the client by its DUID."
+    },
+    {
+      "code": 2,
+      "name": "Server Identifier",
+      "format": "duid",
+      "rfc": "RFC 8415",
+      "description": "Identifies the server by its DUID."
+    },
+    {
+      "code": 3,
+      "name": "Identity Association for Non-temporary Addresses (IA_NA)",
+      "format": "ia-na",
+      "rfc": "RFC 8415",
+      "description": "Container for the non-temporary addresses of one identity association (IAID, T1, T2 and the addresses)."
+    },
+    {
+      "code": 4,
+      "name": "Identity Association for Temporary Addresses (IA_TA)",
+      "format": "ia-ta",
+      "rfc": "RFC 8415",
+      "description": "Container for the temporary addresses of one identity association."
+    },
+    {
+      "code": 5,
+      "name": "IA Address",
+      "format": "ia-addr",
+      "rfc": "RFC 8415",
+      "description": "One address with its preferred and valid lifetimes; normally nested inside an IA_NA or IA_TA."
+    },
+    {
+      "code": 6,
+      "name": "Option Request",
+      "format": "option-code-list",
+      "rfc": "RFC 8415",
+      "description": "The options the client asks the server to send."
+    },
+    {
+      "code": 7,
+      "name": "Preference",
+      "format": "u8",
+      "rfc": "RFC 8415",
+      "description": "How strongly this server is preferred; 255 makes the client pick it immediately."
+    },
+    {
+      "code": 8,
+      "name": "Elapsed Time",
+      "format": "elapsed",
+      "rfc": "RFC 8415",
+      "description": "Time since the client began this exchange, in hundredths of a second."
+    },
+    {
+      "code": 9,
+      "name": "Relay Message",
+      "format": "relay-message",
+      "rfc": "RFC 8415",
+      "description": "The message a relay agent forwards (RELAY-FORW) or delivers (RELAY-REPL)."
+    },
+    {
+      "code": 11,
+      "name": "Authentication",
+      "format": "hex",
+      "rfc": "RFC 8415",
+      "description": "Authentication information for the message."
+    },
+    {
+      "code": 12,
+      "name": "Server Unicast",
+      "format": "ipv6",
+      "rfc": "RFC 8415",
+      "description": "Address the client may use to send messages directly to this server instead of multicast."
+    },
+    {
+      "code": 13,
+      "name": "Status Code",
+      "format": "status-code",
+      "rfc": "RFC 8415",
+      "description": "Outcome of the request, with an optional text message."
+    },
+    {
+      "code": 14,
+      "name": "Rapid Commit",
+      "format": "empty",
+      "rfc": "RFC 8415",
+      "description": "Asks for (or confirms) the two-message exchange Solicit/Reply instead of the usual four."
+    },
+    {
+      "code": 15,
+      "name": "User Class",
+      "format": "user-class",
+      "rfc": "RFC 8415",
+      "description": "Opaque strings describing the kind of user or application the client belongs to."
+    },
+    {
+      "code": 16,
+      "name": "Vendor Class",
+      "format": "vendor-class",
+      "rfc": "RFC 8415",
+      "description": "The vendor's enterprise number and class data identifying the client's hardware or software."
+    },
+    {
+      "code": 17,
+      "name": "Vendor-specific Information",
+      "format": "vendor-opts",
+      "rfc": "RFC 8415",
+      "description": "Vendor-defined sub-options, scoped by the vendor's enterprise number."
+    },
+    {
+      "code": 18,
+      "name": "Interface-Id",
+      "format": "hex",
+      "rfc": "RFC 8415",
+      "description": "Added by a relay agent to identify the interface a message arrived on."
+    },
+    {
+      "code": 19,
+      "name": "Reconfigure Message",
+      "format": "message-type",
+      "rfc": "RFC 8415",
+      "description": "Which message the client should send after a RECONFIGURE (Renew or Information-request)."
+    },
+    {
+      "code": 20,
+      "name": "Reconfigure Accept",
+      "format": "empty",
+      "rfc": "RFC 8415",
+      "description": "Tells the server the client accepts RECONFIGURE messages."
+    },
+    {
+      "code": 21,
+      "name": "SIP Servers Domain Name List",
+      "format": "domain-list",
+      "rfc": "RFC 3319",
+      "description": "Domain names of SIP outbound proxy servers."
+    },
+    {
+      "code": 22,
+      "name": "SIP Servers IPv6 Address List",
+      "format": "ipv6-list",
+      "rfc": "RFC 3319",
+      "description": "Addresses of SIP outbound proxy servers."
+    },
+    {
+      "code": 23,
+      "name": "DNS Recursive Name Server",
+      "format": "ipv6-list",
+      "rfc": "RFC 3646",
+      "description": "Addresses of DNS resolvers, in order of preference."
+    },
+    {
+      "code": 24,
+      "name": "Domain Search List",
+      "format": "domain-list",
+      "rfc": "RFC 3646",
+      "description": "Domain names to append when resolving short names."
+    },
+    {
+      "code": 25,
+      "name": "Identity Association for Prefix Delegation (IA_PD)",
+      "format": "ia-pd",
+      "rfc": "RFC 8415",
+      "description": "Container for the delegated prefixes of one identity association (IAID, T1, T2 and the prefixes)."
+    },
+    {
+      "code": 26,
+      "name": "IA Prefix",
+      "format": "ia-prefix",
+      "rfc": "RFC 8415",
+      "description": "One delegated prefix with its preferred and valid lifetimes; normally nested inside an IA_PD."
+    },
+    {
+      "code": 27,
+      "name": "NIS Servers",
+      "format": "ipv6-list",
+      "rfc": "RFC 3898",
+      "description": "Addresses of NIS servers."
+    },
+    {
+      "code": 28,
+      "name": "NIS+ Servers",
+      "format": "ipv6-list",
+      "rfc": "RFC 3898",
+      "description": "Addresses of NIS+ servers."
+    },
+    {
+      "code": 29,
+      "name": "NIS Domain Name",
+      "format": "domain-list",
+      "rfc": "RFC 3898",
+      "description": "The client's NIS domain."
+    },
+    {
+      "code": 30,
+      "name": "NIS+ Domain Name",
+      "format": "domain-list",
+      "rfc": "RFC 3898",
+      "description": "The client's NIS+ domain."
+    },
+    {
+      "code": 31,
+      "name": "SNTP Servers",
+      "format": "ipv6-list",
+      "rfc": "RFC 4075",
+      "description": "Addresses of SNTP time servers."
+    },
+    {
+      "code": 32,
+      "name": "Information Refresh Time",
+      "format": "duration-secs",
+      "rfc": "RFC 4242",
+      "description": "How long a client using stateless configuration may keep the information before asking again."
+    },
+    {
+      "code": 33,
+      "name": "BCMCS Controller Domain Name List",
+      "format": "domain-list",
+      "rfc": "RFC 4280",
+      "description": "Domain names of broadcast/multicast service controllers."
+    },
+    {
+      "code": 34,
+      "name": "BCMCS Controller IPv6 Address List",
+      "format": "ipv6-list",
+      "rfc": "RFC 4280",
+      "description": "Addresses of broadcast/multicast service controllers."
+    },
+    {
+      "code": 39,
+      "name": "Client FQDN",
+      "format": "fqdn",
+      "rfc": "RFC 4704",
+      "description": "The client's fully qualified domain name, with flags saying who updates DNS."
+    },
+    {
+      "code": 41,
+      "name": "New POSIX Timezone",
+      "format": "string",
+      "rfc": "RFC 4833",
+      "description": "Time zone as a POSIX TZ string."
+    },
+    {
+      "code": 42,
+      "name": "New TZDB Timezone",
+      "format": "string",
+      "rfc": "RFC 4833",
+      "description": "Time zone as an IANA tz database name."
+    },
+    {
+      "code": 43,
+      "name": "Echo Request",
+      "format": "option-code-list",
+      "rfc": "RFC 4994",
+      "description": "Options the server should echo back in its reply."
+    },
+    {
+      "code": 56,
+      "name": "NTP Server",
+      "format": "hex",
+      "rfc": "RFC 5908",
+      "description": "NTP server location (address, multicast address or FQDN) as sub-options."
+    },
+    {
+      "code": 59,
+      "name": "Boot File URL",
+      "format": "string",
+      "rfc": "RFC 5970",
+      "description": "URL of the boot file for network boot."
+    },
+    {
+      "code": 60,
+      "name": "Boot File Parameters",
+      "format": "hex",
+      "rfc": "RFC 5970",
+      "description": "Parameters for the boot file, as length-prefixed strings."
+    },
+    {
+      "code": 61,
+      "name": "Client System Architecture Type",
+      "format": "u16-list",
+      "rfc": "RFC 5970",
+      "description": "Architecture types of the client system, for network boot."
+    },
+    {
+      "code": 62,
+      "name": "Client Network Interface Identifier",
+      "format": "hex",
+      "rfc": "RFC 5970",
+      "description": "Network interface type and version of the client, for network boot."
+    },
+    {
+      "code": 64,
+      "name": "AFTR-Name",
+      "format": "domain-list",
+      "rfc": "RFC 6334",
+      "description": "Domain name of the DS-Lite address family transition router."
+    },
+    {
+      "code": 82,
+      "name": "SOL_MAX_RT",
+      "format": "duration-secs",
+      "rfc": "RFC 8415",
+      "description": "Maximum retransmission timeout for Solicit messages."
+    },
+    {
+      "code": 83,
+      "name": "INF_MAX_RT",
+      "format": "duration-secs",
+      "rfc": "RFC 8415",
+      "description": "Maximum retransmission timeout for Information-request messages."
+    },
+    {
+      "code": 103,
+      "name": "Captive-Portal",
+      "format": "string",
+      "rfc": "RFC 8910",
+      "description": "URI of the network's captive portal API."
+    }
+  ]
+}

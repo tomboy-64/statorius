@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.8.3
+
+- Link-local IPv6 targets (`fe80::/10`, and the `ff01::`/`ff02::` multicast scopes) work in the Ping tab for ICMP, TCP and UDP: the interface is part of the target, `fe80::1%eth0` by name or `fe80::1%3` by index (the usual spelling on Windows). A link-local address without an interface is rejected with an explanation instead of failing in the socket layer, and a zone on any other address is rejected as well. The same address on two interfaces is two pingers; saved `.ips` lists keep the `%interface`.
+- DHCP tab: DHCPv6 (UDP 546/547) is captured next to DHCPv4. SOLICIT/ADVERTISE/REQUEST/REPLY and the other message types are decoded, relay messages are unwrapped, and the client and server DUIDs and every address and prefix from IA_NA/IA_TA/IA_PD are shown. About 45 options have names, explanations and value decoders (`dhcpv6_options.json`); others show as hex. DHCPv4 and DHCPv6 exchanges are listed separately and labelled.
+- Interfaces tab: an interface with an IPv4 *or* an IPv6 address opens automatically on first display (previously only one with both did).
+- Tests for zone parsing, scoped pinger identity, the DHCPv6 decoder, the sniffer's frame decoding (including a real IPv6 loopback datagram through the capture filter) and DHCP transaction grouping. CI runs the sniffer tests with raw-socket privileges as well.
+- `arch/PKGBUILD` is at 0.8.3.
+
 ## 0.8.2
 
 - `.deb` package for Debian/Ubuntu, built by the release workflow with `cargo-deb` from `[package.metadata.deb]` in `Cargo.toml`. libpcap and pkexec are recommended packages, since only the L2 features need them. Includes the desktop entry and icons.

@@ -7,13 +7,13 @@ A desktop tool (Rust, egui) for probing and inspecting networks. Windows and Lin
 **Ping**
 - ICMP echo (configurable payload size), TCP SYN-style connect probes and UDP null probes, per target and port. One target can run an ICMP, a TCP and a UDP pinger side by side; the list shows protocol and port.
 - Every failure shows its reason: timeout, TCP RST, ICMP unreachable / admin-prohibited / TTL exceeded (with the sending router), UDP port unreachable. A UDP probe that gets no answer is shown as "no reply" (open or filtered), not as a failure.
-- Targets can be literal IPs, CIDR ranges (swept, up to 512 hosts) or hostnames (resolved once; TCP/UDP probe a single address, ICMP every resolved address). Optional ping count; target lists save to and load from `.ips` files.
+- Targets can be literal IPs (link-local IPv6 with its interface: `fe80::1%eth0` or `fe80::1%3`), CIDR ranges (swept, up to 512 hosts) or hostnames (resolved once; TCP/UDP probe a single address, ICMP every resolved address). Optional ping count; target lists save to and load from `.ips` files.
 
 **L2 Ping** (needs Npcap on Windows, libpcap on Linux, plus elevation for the helper process)
-- ICMP echo and ARP/NDP pings sent as hand-built Ethernet frames, with optional 802.1Q VLAN tag and selectable source IP.
+- ICMP echo, ICMP timestamp (IPv4 only) and ARP/NDP pings sent as hand-built Ethernet frames, with optional 802.1Q VLAN tag and selectable source IP.
 - Duplicate-address check for the chosen source IP (RFC 5227 ARP probe, IPv6 DAD).
 
-**DHCP** - passive capture of DHCP exchanges (needs L2 mode) with decoded options and per-field explanations.
+**DHCP** - passive capture of DHCPv4 and DHCPv6 exchanges (needs L2 mode) with decoded options and per-field explanations; DHCPv6 shows the DUIDs and the addresses and prefixes handed out.
 
 **DNS** - system DNS server discovery with per-server checks, manual server lists (`.dns` files) and a dig-like query panel (record type, TCP/UDP, RD/CD/DO bits, trace).
 
@@ -23,7 +23,7 @@ A desktop tool (Rust, egui) for probing and inspecting networks. Windows and Lin
 
 ## Planned features
 
-- ICMP Timestamp (type 13), Address Mask (type 17), traceroute
+- ICMP Address Mask (type 17), traceroute, ICMP Timestamp outside L2 mode
 - True half-open TCP SYN probes, TCP ACK probes
 - IP protocol ping
 - TCP idle/zombie ping

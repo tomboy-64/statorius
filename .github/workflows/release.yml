@@ -88,16 +88,16 @@ jobs:
         run: cargo test --locked
 
       # Loopback capture/injection needs CAP_NET_RAW: without it those tests
-      # skip themselves above. Run the pcap tests again as root, on the
+      # skip themselves above. Run the pcap and sniffer tests again as root, on the
       # already-built test binary so nothing is rebuilt as root.
-      - name: Run pcap tests with raw-socket privileges (Linux)
+      - name: Run pcap and sniffer tests with raw-socket privileges (Linux)
         if: runner.os == 'Linux'
         run: |
           set -euo pipefail
           TEST_BIN=$(cargo test --locked --no-run --message-format=json \
             | jq -r 'select(.profile.test == true and .executable != null) | .executable' | head -n1)
           echo "Test binary: $TEST_BIN"
-          sudo "$TEST_BIN" pcap::
+          sudo "$TEST_BIN" pcap:: dhcp_sniffer::
 
   build:
     name: Build on ${{ matrix.os }}

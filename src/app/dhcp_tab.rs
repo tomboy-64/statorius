@@ -1,18 +1,19 @@
 use eframe::egui;
 
-use crate::net::dhcp::{self, DhcpMessageWire};
+use crate::net::dhcp::{self, DhcpMessageWire, DhcpVersion};
 use crate::net::l2_manager::L2Status;
 
 use super::StatoriusApp;
 
 impl StatoriusApp {
-    /// The "DHCP" tab: every DHCP/BOOTP exchange the passive sniffer (see
-    /// `net::dhcp_sniffer`, running inside the L2 helper) has captured so
-    /// far, grouped by transaction id and listed oldest exchange first. Each
-    /// transaction is a collapsing header labelled with its `xid` and the
-    /// timestamp of the *first* message seen for it; expanding it shows
-    /// every message in that exchange (DISCOVER/OFFER/REQUEST/ACK/... or
-    /// plain BOOTP) with its options fully decoded.
+    /// The "DHCP" tab: every DHCPv4/BOOTP and DHCPv6 exchange the passive
+    /// sniffer (see `net::dhcp_sniffer`, running inside the L2 helper) has
+    /// captured so far, grouped by transaction id and listed oldest
+    /// exchange first. Each transaction is a collapsing header labelled
+    /// with its protocol, `xid` and the timestamp of the *first* message
+    /// seen for it; expanding it shows every message in that exchange
+    /// (DISCOVER/OFFER/REQUEST/ACK/..., SOLICIT/ADVERTISE/REPLY/... or plain
+    /// BOOTP) with its options fully decoded.
     pub(super) fn ui_dhcp_tab(&mut self, ui: &mut egui::Ui) {
         // Same reasoning as the L2 Ping tab: this is only reachable once L2
         // mode is active (see `render_tab_bar`), so this is a defensive
@@ -47,43 +48,60 @@ impl StatoriusApp {
             if transactions.is_empty() {
                 ui.weak(
                     "No DHCP traffic captured yet - broadcasts (DISCOVER/REQUEST) and \
-                     replies (OFFER/ACK/NAK) will appear here as they're seen.",
+                     replies (OFFER/ACK/NAK), and DHCPv6 messages (SOLICIT/ADVERTISE/\
+                     REPLY), will appear here as they're seen.",
                 );
                 return;
             }
 
             for txn in &transactions {
-                let is_open = *self.dhcp_open.entry(txn.xid).or_insert(false);
+                let key = (txn.version, txn.xid);
+                let is_open = *self.dhcp_open.entry(key).or_insert(false);
                 let header_title = format!(
-                    "xid 0x{:08x}  —  {}  —  {} message(s)",
-                    txn.xid,
+                    "{} {}  —  {}  —  {} message(s)",
+                    txn.version.label(),
+                    format_xid(txn.version, txn.xid),
                     format_timestamp(txn.first_seen_unix_ms),
                     txn.messages.len(),
                 );
                 let resp = egui::CollapsingHeader::new(header_title)
-                    .id_salt(txn.xid)
+                    .id_salt(key)
                     .open(Some(is_open))
                     .show(ui, |ui| {
                         for (i, msg) in txn.messages.iter().enumerate() {
-                            render_dhcp_message(ui, txn.xid, i, msg);
+                            render_dhcp_message(ui, key, i, msg);
                         }
                     });
                 if resp.header_response.clicked() {
-                    self.dhcp_open.insert(txn.xid, !is_open);
+                    self.dhcp_open.insert(key, !is_open);
                 }
             }
         });
     }
 }
 
+/// `xid 0x12345678` (32 bits) for DHCPv4, `xid 0x123456` (24 bits) for DHCPv6.
+fn format_xid(version: DhcpVersion, xid: u32) -> String {
+    match version {
+        DhcpVersion::V4 => format!("xid 0x{xid:08x}"),
+        DhcpVersion::V6 => format!("xid 0x{xid:06x}"),
+    }
+}
+
 /// One message within a transaction: a summary line (type, capture time,
-/// client MAC, VLAN, the fixed BOOTP addresses that are actually set), plus
+/// client MAC or DUIDs, VLAN, the fixed BOOTP addresses or the IPv6
+/// addresses that are actually set), plus
 /// its fully decoded options tucked into their own nested collapsing
 /// header so a transaction with several messages doesn't turn into a wall
 /// of option tables by default. Wrapped in `ui.scope` (not `ui.group`) so
 /// each message still gets its own isolated child `Ui`/ID scope without a
 /// visible frame around it.
-fn render_dhcp_message(ui: &mut egui::Ui, xid: u32, index: usize, msg: &DhcpMessageWire) {
+fn render_dhcp_message(
+    ui: &mut egui::Ui,
+    key: (DhcpVersion, u32),
+    index: usize,
+    msg: &DhcpMessageWire,
+) {
     // `ui.scope` rather than `ui.group`: it still gives this message its
     // own child `Ui` (and ID scope, keeping its widgets from colliding
     // with the next message's) but - unlike `group` - paints no visible
@@ -100,16 +118,20 @@ fn render_dhcp_message(ui: &mut egui::Ui, xid: u32, index: usize, msg: &DhcpMess
             }
         });
 
-        render_address_highlights(ui, msg);
+        if msg.version == DhcpVersion::V6 {
+            render_v6_summary(ui, msg);
+        } else {
+            render_address_highlights(ui, msg);
+        }
 
         egui::CollapsingHeader::new(format!("Options ({})", msg.options.len()))
-            .id_salt(("dhcp_opts", xid, index))
+            .id_salt(("dhcp_opts", key, index))
             .show(ui, |ui| {
                 if msg.options.is_empty() {
                     ui.weak("No options.");
                     return;
                 }
-                egui::Grid::new(("dhcp_opts_grid", xid, index))
+                egui::Grid::new(("dhcp_opts_grid", key, index))
                     .num_columns(3)
                     .striped(true)
                     .spacing([12.0, 4.0])
@@ -125,7 +147,7 @@ fn render_dhcp_message(ui: &mut egui::Ui, xid: u32, index: usize, msg: &DhcpMess
                             ui.vertical(|ui| {
                                 ui.set_min_width(160.0);
                                 let name_resp = ui.label(&opt.name);
-                                if let Some(help) = dhcp::option_help(opt.code) {
+                                if let Some(help) = dhcp::option_help(msg.version, opt.code) {
                                     name_resp.on_hover_text(help);
                                 }
                                 ui.weak(format!("({})", opt.data_type));
@@ -146,6 +168,41 @@ fn render_dhcp_message(ui: &mut egui::Ui, xid: u32, index: usize, msg: &DhcpMess
     });
 
     ui.add_space(6.0);
+}
+
+/// DHCPv6 context for a message: who sent it to whom, the client's and
+/// server's DUID, and every address or prefix it carries - each with a
+/// tooltip, in the same slightly brighter shade as the DHCPv4 addresses.
+fn render_v6_summary(ui: &mut egui::Ui, msg: &DhcpMessageWire) {
+    let highlight = ui.visuals().text_color().gamma_multiply(1.4);
+
+    if let (Some(src), Some(dst)) = (&msg.src_ip, &msg.dst_ip) {
+        ui.label(egui::RichText::new(format!("{src} \u{2192} {dst}")).color(highlight))
+            .on_hover_text("IPv6 source and destination of the captured packet.");
+    }
+    ui.horizontal_wrapped(|ui| {
+        if let Some(duid) = &msg.client_duid {
+            ui.label(egui::RichText::new(format!("client {duid}")).color(highlight))
+                .on_hover_text("The client's DUID (option 1), which identifies it instead of a MAC address.");
+        }
+        if let Some(duid) = &msg.server_duid {
+            ui.label(egui::RichText::new(format!("server {duid}")).color(highlight))
+                .on_hover_text("The server's DUID (option 2).");
+        }
+    });
+    if !msg.addresses.is_empty() {
+        ui.horizontal_wrapped(|ui| {
+            for addr in &msg.addresses {
+                let (kind, help) = if addr.contains('/') {
+                    ("prefix", "A prefix carried in an IA_PD option (prefix delegation).")
+                } else {
+                    ("address", "An address carried in an IA_NA or IA_TA option.")
+                };
+                ui.label(egui::RichText::new(format!("{kind} {addr}")).color(highlight))
+                    .on_hover_text(help);
+            }
+        });
+    }
 }
 
 /// `ciaddr`/`yiaddr`/`siaddr`/`giaddr` mean four different, easily-confused

@@ -89,7 +89,7 @@ impl StatoriusApp {
                     .map(|mac| mac.to_string())
                     .unwrap_or_else(|| "No MAC".to_string());
 
-                let has_valid_ip = (!iface.ipv4.is_empty()) && (!iface.ipv6.is_empty());
+                let has_valid_ip = !iface.ipv4.is_empty() || !iface.ipv6.is_empty();
 
                 let index = iface.index as usize;
                 if has_valid_ip && !interface_open_state(&mut self.interfaces_open, index).2 {

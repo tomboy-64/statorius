@@ -48,6 +48,7 @@ pub struct IcmpSocketBackend {
 impl IcmpSocketBackend {
     pub async fn new(
         target: IpAddr,
+        scope: u32,
         ident: PingIdentifier,
         payload_size: usize,
         client_v4: &Client,
@@ -60,6 +61,8 @@ impl IcmpSocketBackend {
         };
         let mut pinger = client.pinger(target, ident).await;
         pinger.timeout(ICMP_TIMEOUT);
+        // The interface of a link-local IPv6 target; ignored for IPv4.
+        pinger.scope_id(scope);
         Ok(Self { pinger, payload_size })
     }
 }
@@ -80,6 +83,15 @@ impl PingBackend for IcmpSocketBackend {
             Err(SurgeError::Timeout { .. }) => PingResult::Timeout,
             Err(e) => PingResult::Error(e.to_string()),
         }
+    }
+}
+
+/// The socket address for a probe target; `scope` is the interface index of
+/// a link-local IPv6 target (`0` = none, and always ignored for IPv4).
+fn socket_addr(target: IpAddr, port: u16, scope: u32) -> std::net::SocketAddr {
+    match target {
+        IpAddr::V4(v4) => std::net::SocketAddr::V4(std::net::SocketAddrV4::new(v4, port)),
+        IpAddr::V6(v6) => std::net::SocketAddr::V6(std::net::SocketAddrV6::new(v6, port, 0, scope)),
     }
 }
 
@@ -178,18 +190,19 @@ fn classify_unreachable(e: &std::io::Error) -> Option<(String, String)> {
 /// calls anyway).
 pub struct TcpConnectBackend {
     port: u16,
+    scope: u32,
 }
 
 impl TcpConnectBackend {
-    pub fn new(port: u16) -> Self {
-        Self { port }
+    pub fn new(port: u16, scope: u32) -> Self {
+        Self { port, scope }
     }
 }
 
 #[async_trait]
 impl PingBackend for TcpConnectBackend {
     async fn ping_once(&mut self, target: IpAddr, _seq: u16) -> PingResult {
-        let addr = std::net::SocketAddr::new(target, self.port);
+        let addr = socket_addr(target, self.port, self.scope);
         let socket = match if target.is_ipv4() {
             TcpSocket::new_v4()
         } else {
@@ -237,11 +250,12 @@ impl PingBackend for TcpConnectBackend {
 ///   rather than guessing "open" or "down".
 pub struct UdpProbeBackend {
     port: u16,
+    scope: u32,
 }
 
 impl UdpProbeBackend {
-    pub fn new(port: u16) -> Self {
-        Self { port }
+    pub fn new(port: u16, scope: u32) -> Self {
+        Self { port, scope }
     }
 }
 
@@ -274,7 +288,7 @@ impl UdpProbeBackend {
 #[async_trait]
 impl PingBackend for UdpProbeBackend {
     async fn ping_once(&mut self, target: IpAddr, _seq: u16) -> PingResult {
-        let addr = std::net::SocketAddr::new(target, self.port);
+        let addr = socket_addr(target, self.port, self.scope);
         let bind_addr = if target.is_ipv4() { "0.0.0.0:0" } else { "[::]:0" };
         let socket = match UdpSocket::bind(bind_addr).await {
             Ok(s) => s,
@@ -306,11 +320,23 @@ mod tests {
 
     const LO: IpAddr = IpAddr::V4(Ipv4Addr::LOCALHOST);
 
+    #[test]
+    fn socket_addr_carries_the_scope_only_for_ipv6() {
+        let v6: IpAddr = "fe80::1".parse().unwrap();
+        match socket_addr(v6, 443, 7) {
+            std::net::SocketAddr::V6(a) => {
+                assert_eq!((a.port(), a.scope_id()), (443, 7));
+            }
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(socket_addr(LO, 80, 7).to_string(), "127.0.0.1:80");
+    }
+
     #[tokio::test]
     async fn tcp_open_port_succeeds() {
         let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = l.local_addr().unwrap().port();
-        let r = TcpConnectBackend::new(port).ping_once(LO, 0).await;
+        let r = TcpConnectBackend::new(port, 0).ping_once(LO, 0).await;
         assert!(matches!(r, PingResult::Success(_)), "{r:?}");
     }
 
@@ -319,7 +345,7 @@ mod tests {
         let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = l.local_addr().unwrap().port();
         drop(l);
-        let r = TcpConnectBackend::new(port).ping_once(LO, 0).await;
+        let r = TcpConnectBackend::new(port, 0).ping_once(LO, 0).await;
         match r {
             PingResult::Rejected { short, .. } => assert_eq!(short, "refused (RST)"),
             // Windows retransmits the SYN after a RST for about as long as
@@ -339,7 +365,7 @@ mod tests {
                 let _ = srv.send_to(b"x", from).await;
             }
         });
-        let r = UdpProbeBackend::new(port).ping_once(LO, 0).await;
+        let r = UdpProbeBackend::new(port, 0).ping_once(LO, 0).await;
         assert!(matches!(r, PingResult::Success(_)), "{r:?}");
     }
 
@@ -348,7 +374,7 @@ mod tests {
         let s = UdpSocket::bind("127.0.0.1:0").await.unwrap();
         let port = s.local_addr().unwrap().port();
         drop(s);
-        let r = UdpProbeBackend::new(port).ping_once(LO, 0).await;
+        let r = UdpProbeBackend::new(port, 0).ping_once(LO, 0).await;
         match r {
             PingResult::Rejected { short, .. } => assert_eq!(short, "port unreachable"),
             other => panic!("{other:?}"),
@@ -360,7 +386,7 @@ mod tests {
         // Bound but never answers: no ICMP unreachable, no reply.
         let s = UdpSocket::bind("127.0.0.1:0").await.unwrap();
         let port = s.local_addr().unwrap().port();
-        let r = UdpProbeBackend::new(port).ping_once(LO, 0).await;
+        let r = UdpProbeBackend::new(port, 0).ping_once(LO, 0).await;
         assert!(matches!(r, PingResult::Silent), "{r:?}");
         drop(s);
     }
@@ -368,7 +394,7 @@ mod tests {
     #[tokio::test]
     async fn tcp_unroutable_times_out_or_is_rejected() {
         // TEST-NET-1: sandbox may drop (Timeout) or answer unreachable.
-        let r = TcpConnectBackend::new(80)
+        let r = TcpConnectBackend::new(80, 0)
             .ping_once(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 1)), 0)
             .await;
         assert!(
